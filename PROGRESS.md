@@ -169,7 +169,25 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       software encode even by mistake.
       Verified: 5 tests covering each message case and the never-select-software
       rule.
-- [ ] Verify GPU "Video Encode" engine is the one doing the work, not CPU/3D engine
+- [x] Verify GPU "Video Encode" engine is the one doing the work, not CPU/3D engine
+      Made automatic rather than "squint at Task Manager".
+      `Windows/Diagnostics/GpuEngineCounters.cs` reads the same per-process
+      counters Task Manager's GPU columns come from
+      (`\GPU Engine(*)\Utilization Percentage`) through PDH, filtered to our own
+      PID, using `PdhAddEnglishCounter` so the path works on a localised
+      Windows. `Diagnostics/EncodeAttribution.cs` holds the judgement and is
+      platform-agnostic, so it is tested: the video encode engine must be
+      genuinely busy (>= 1%) and process CPU must stay inside the 3% budget.
+      Some 3D and copy engine use is expected and explicitly does not fail the
+      check — the capture copy and the NV12 conversion legitimately run there;
+      the requirement is about where the *encode* happens.
+      `--encode-test` now samples both during the run (skipping the first second
+      of encoder warm-up) and exits 6 if attribution fails, or 0 with a plain
+      warning if the counters are unavailable — an unreadable counter reports
+      "UNVERIFIED", never a silent pass.
+      Verified: 9 tests on the judgement logic, including the case this exists
+      to catch (encoding landing on the 3D engine while the GPU still looks
+      busy). The PDH read itself compiles but was not executed — needs Windows.
 
 ## Phase 3 — Ring buffer + instant clip
 - [ ] Rolling in-memory/disk ring buffer holding configurable trailing duration

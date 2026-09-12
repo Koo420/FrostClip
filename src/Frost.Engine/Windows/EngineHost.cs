@@ -3,6 +3,7 @@ using Frost.Engine.Capture;
 using Frost.Engine.Diagnostics;
 using Frost.Engine.Encoding;
 using Frost.Engine.Windows.Encode;
+using Frost.Engine.Windows.Diagnostics;
 
 namespace Frost.Engine.Windows;
 
@@ -162,7 +163,19 @@ internal static partial class EngineHost
         using var muxer = new Mp4Muxer(output, encodedType, log);
         pipeline.SetSampleSink(muxer);
 
+        using var gpuCounters = GpuEngineCounters.TryCreate(log);
+        var attribution = new EncodeAttributionTracker();
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        var processorCount = Environment.ProcessorCount;
+
         var clock = System.Diagnostics.Stopwatch.StartNew();
+        var lastCpu = self.TotalProcessorTime;
+        var lastElapsed = clock.Elapsed;
+
+        // The first second is encoder warm-up: the driver is still allocating,
+        // and sampling it would make every run look CPU-heavy.
+        var warmUp = TimeSpan.FromSeconds(Math.Min(1.0, seconds / 4));
+
         while (clock.Elapsed < TimeSpan.FromSeconds(seconds))
         {
             Thread.Sleep(500);
@@ -172,10 +185,35 @@ internal static partial class EngineHost
                 log.Error("Capture stopped early.");
                 break;
             }
+
+            self.Refresh();
+            var cpu = self.TotalProcessorTime;
+            var elapsed = clock.Elapsed;
+            var window = elapsed - lastElapsed;
+
+            if (window > TimeSpan.Zero && elapsed > warmUp)
+            {
+                // Share of the whole machine, which is what the performance
+                // budget is expressed in.
+                var cpuPercent =
+                    (cpu - lastCpu).TotalSeconds / window.TotalSeconds / processorCount * 100.0;
+
+                var engines = gpuCounters?.Sample() ?? [];
+                attribution.Add(
+                    engines.Select(e =>
+                        new KeyValuePair<string, double>(e.EngineType, e.UtilizationPercent)),
+                    cpuPercent);
+            }
+
+            lastCpu = cpu;
+            lastElapsed = elapsed;
         }
 
         pipeline.Stop();
         muxer.Finish(TimeSpan.FromSeconds(15));
+
+        var attributionReport = attribution.Report();
+        log.Info($"Encode attribution:{Environment.NewLine}{attributionReport}");
 
         var info = new FileInfo(output);
         log.Info(
@@ -198,6 +236,27 @@ internal static partial class EngineHost
             log.Error("No keyframes were produced; clips could not be trimmed from this stream.");
             return 5;
         }
+
+        if (!attributionReport.CountersAvailable)
+        {
+            // Not a failure: the encode worked, we just could not prove which
+            // engine did it. Say so plainly rather than implying a pass.
+            log.Warn(
+                "GPU engine counters were unavailable, so which engine did the encoding " +
+                "could not be verified on this machine.");
+            return 0;
+        }
+
+        if (!attributionReport.Passes)
+        {
+            log.Error($"Encode attribution check failed: {attributionReport.Verdict}");
+            return 6;
+        }
+
+        log.Info(
+            $"Encoding ran on the GPU's video encode engine " +
+            $"({attributionReport.VideoEncodePercent:F1}%) with " +
+            $"{attributionReport.ProcessCpuPercent:F2}% CPU.");
 
         return 0;
     }
