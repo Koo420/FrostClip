@@ -254,7 +254,30 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       Engine is AOT.
       Verified: 46 tests across naming, the service and the sidecar store. The
       MP4 muxing itself compiles but was not executed — needs Windows.
-- [ ] Multiple duration presets bound to different hotkeys simultaneously
+- [x] Multiple duration presets bound to different hotkeys simultaneously
+      `Hotkeys/HotkeyRouter.cs` (portable) plus `Frost.Shared/Settings/HotkeyAssignment.cs`
+      and `Frost.Shared/Hotkeys/HotkeyBinding.cs`. Several `SaveClip` hotkeys can
+      be live at once, each with its own duration, all reading the same ring
+      buffer — the buffer is sized once from `LongestClipDuration`, and a shorter
+      preset is just a shorter read. Defaults ship Alt+F9/F10/F11 as 15s/30s/60s
+      plus Alt+F12 for full-session and Alt+F1 for bookmark, and a test asserts
+      the defaults do not collide.
+      The router is written for the place it runs — inside the low-level keyboard
+      hook, on every keystroke the user makes, including the ones they are aiming
+      with. Matching is a loop over parallel arrays with no allocation, no LINQ,
+      no locking and no hashing (verified: 0 bytes over 200k events), and it only
+      queues the action. Edge detection lives here too, because without it
+      holding Alt+F10 would try to save thirty clips a second. Keys are never
+      swallowed: a binding may collide with something the game uses, and eating
+      the keystroke would be a worse failure than an accidental clip.
+      Bindings round-trip through text including keys the name table does not
+      cover, so an exotic key is not lost by a settings save/load. Duplicate
+      bindings are reported as conflicts for the settings UI to warn about
+      rather than rejected.
+      Verified end to end on this host: one ring buffer, three hotkeys, three
+      clips of 15s/30s/60s, each at least the requested length and at most one
+      keyframe interval over (`ThreePresetsProduceThreeClipsOfThreeLengths`).
+      57 hotkey tests in total.
 
 ## Phase 4 — Hotkeys, settings, IPC
 - [ ] Low-level keyboard hook works while a fullscreen-exclusive game has focus
