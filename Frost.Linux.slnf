@@ -1,0 +1,10 @@
+{
+  "solution": {
+    "path": "Frost.sln",
+    "projects": [
+      "src\\Frost.Shared\\Frost.Shared.csproj",
+      "src\\Frost.Engine\\Frost.Engine.csproj",
+      "tests\\Frost.Engine.Tests\\Frost.Engine.Tests.csproj"
+    ]
+  }
+}

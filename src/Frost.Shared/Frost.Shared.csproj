@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Deliberately platform-agnostic: IPC contracts, settings schema and clip
+         metadata are shared by the Engine (Windows) and the test host, and must
+         never drag a Windows dependency into either. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <IsAotCompatible>true</IsAotCompatible>
+    <RootNamespace>Frost.Shared</RootNamespace>
+  </PropertyGroup>
+
+</Project>

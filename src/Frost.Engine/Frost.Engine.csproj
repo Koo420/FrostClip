@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- net8.0 carries every platform-agnostic piece (ring buffer, pacing,
+         encoder selection, loudness DSP, retention, IPC) so it can be unit
+         tested on any host. The Windows TFM adds the WGC / D3D11 / Media
+         Foundation / WASAPI / keyboard-hook implementations. -->
+    <TargetFrameworks>net8.0;$(FrostWindowsTfm)</TargetFrameworks>
+    <RootNamespace>Frost.Engine</RootNamespace>
+    <AssemblyName>Frost.Engine</AssemblyName>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Tray-only process: no console window on Windows. -->
+    <OutputType Condition="$(TargetFramework.Contains('-windows'))">WinExe</OutputType>
+    <OutputType Condition="!$(TargetFramework.Contains('-windows'))">Exe</OutputType>
+    <!-- AOT keeps idle RSS near the &lt;50MB budget and removes JIT warm-up from
+         the first hotkey press. Only meaningful for the Windows publish. -->
+    <PublishAot Condition="$(TargetFramework.Contains('-windows'))">true</PublishAot>
+    <PublishAot Condition="!$(TargetFramework.Contains('-windows'))">false</PublishAot>
+    <ServerGarbageCollector>false</ServerGarbageCollector>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$(TargetFramework.Contains('-windows'))">
+    <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
+  </PropertyGroup>
+
+  <!-- Windows-native implementations compile only under the Windows TFM. -->
+  <ItemGroup Condition="!$(TargetFramework.Contains('-windows'))">
+    <Compile Remove="Windows/**/*.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="$(TargetFramework.Contains('-windows'))">
+    <PackageReference Include="Vortice.Direct3D11" Version="3.6.2" />
+    <PackageReference Include="Vortice.MediaFoundation" Version="3.6.2" />
+    <PackageReference Include="Vortice.DXGI" Version="3.6.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Frost.Shared/Frost.Shared.csproj" />
+  </ItemGroup>
+
+</Project>

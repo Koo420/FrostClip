@@ -1,0 +1,24 @@
+<Project>
+
+  <PropertyGroup>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <!-- Lets the Windows-targeted projects restore their ref packs on a non-Windows
+         build host. Harmless on Windows. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- Frost's hot path is hand-tuned; we want the compiler to be loud about
+         anything that would quietly allocate or box. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <FrostWindowsTfm>net8.0-windows10.0.19041.0</FrostWindowsTfm>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Product>Frost</Product>
+    <Company>Frost</Company>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+</Project>
