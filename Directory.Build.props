@@ -12,7 +12,12 @@
          anything that would quietly allocate or box. -->
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <FrostWindowsTfm>net8.0-windows10.0.19041.0</FrostWindowsTfm>
+    <FrostWindowsTfm>net8.0-windows10.0.26100.0</FrostWindowsTfm>
+    <!-- Build against a recent SDK projection so newer WGC knobs (e.g.
+         IsBorderRequired) are reachable, but keep the floor at Windows 10 1903,
+         which is where Windows.Graphics.Capture first shipped. Anything above
+         the floor is guarded with ApiInformation at runtime. -->
+    <FrostWindowsMinVersion>10.0.19041.0</FrostWindowsMinVersion>
   </PropertyGroup>
 
   <PropertyGroup>

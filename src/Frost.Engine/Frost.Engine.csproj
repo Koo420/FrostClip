@@ -23,6 +23,10 @@
 
   <PropertyGroup Condition="$(TargetFramework.Contains('-windows'))">
     <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
+    <TargetPlatformMinVersion>$(FrostWindowsMinVersion)</TargetPlatformMinVersion>
+    <!-- The per-frame path talks raw COM vtables to avoid allocating an RCW per
+         captured frame; that needs unsafe. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <!-- Windows-native implementations compile only under the Windows TFM. -->
