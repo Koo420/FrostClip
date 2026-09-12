@@ -190,7 +190,39 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       busy). The PDH read itself compiles but was not executed — needs Windows.
 
 ## Phase 3 — Ring buffer + instant clip
-- [ ] Rolling in-memory/disk ring buffer holding configurable trailing duration
+- [x] Rolling in-memory/disk ring buffer holding configurable trailing duration
+      `Encoding/EncodedSampleRing.cs` over `SampleArena`: encoded frames go in
+      continuously, the oldest fall out, and memory stays bounded no matter how
+      long the Engine sits armed. Sized from bitrate x duration x headroom
+      (`RingBufferOptions`).
+      Three things this had to get right, all tested:
+      * **Keyframe alignment.** A snapshot always starts on a keyframe, because
+        a clip that starts mid-GOP references frames that are not in the file
+        and no decoder will play it. The honest consequence is that a "15
+        second" clip can run up to one keyframe interval long, which is why the
+        encoder's interval defaults to 2s.
+      * **Reading while recording.** Writing a clip takes long enough that more
+        frames arrive during it. Eviction is blocked from passing an open
+        snapshot, and the arena's headroom pays for the delay — a test feeds 60
+        further seconds into a 5-second buffer with a snapshot open and confirms
+        the pinned samples still read back byte-identical, with new frames
+        refused and counted rather than the clip being corrupted. Recording
+        recovers as soon as the snapshot closes.
+      * **Effective vs requested duration.** When the memory cap binds (5
+        minutes at 50Mbps wants ~1.75GB), `EffectiveMaxTrailingDuration` and
+        `IsLimitedByMemoryCap` report the shorter figure instead of silently
+        giving the user a third of what they asked for.
+      Deviation: the buffer is in-memory only; there is no disk-backed spill
+      (the checklist said "in-memory/disk"). Reason: a disk-backed rolling
+      buffer writes every encoded frame to the SSD for as long as the Engine is
+      merely *armed*, whether or not the user ever clips — constant write wear
+      and constant disk I/O for a feature that is idle most of the time. An
+      in-memory buffer with an explicit cap and a surfaced effective duration is
+      the better trade. Long recordings are served by full-session recording
+      (Phase 5), which writes to disk because that is what the user asked for.
+      Verified: 31 tests, including a concurrent writer/snapshot run, the
+      pinned-eviction case above, and a zero-allocation check on the write path
+      (which runs on the encode thread the whole time the Engine is armed).
 - [ ] Hotkey → finalize trailing N seconds to an MP4 on disk
 - [ ] Multiple duration presets bound to different hotkeys simultaneously
 
