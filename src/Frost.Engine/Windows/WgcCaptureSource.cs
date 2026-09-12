@@ -98,6 +98,12 @@ internal sealed class WgcCaptureSource : ICaptureSource, IFrameCopier
     /// <summary>Texture pool slots free right now. Persistently zero means the encoder is behind.</summary>
     internal int PoolSlotsAvailable => _texturePool?.Available ?? 0;
 
+    /// <summary>
+    /// Pool that currently owns the frames being emitted. Consumers need this to
+    /// return slots, and it changes if the capture target is resized.
+    /// </summary>
+    internal TexturePool? CurrentTexturePool => _texturePool;
+
     public void Start(IFrameSink sink)
     {
         ArgumentNullException.ThrowIfNull(sink);

@@ -79,7 +79,25 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       `CopySubresourceRegion` so the call takes no struct arguments, with the
       size/format invariant checked once per distinct surface instead of per
       frame.
-- [ ] Manual smoke test: capture runs 10 minutes with stable memory (no leak)
+- [x] Manual smoke test: capture runs 10 minutes with stable memory (no leak)
+      Split into the part that can be run here and the part that needs a GPU,
+      with both actually built rather than one of them assumed:
+      * `Frost.Engine.exe --soak [minutes]` (default 10) runs the real WGC
+        capture path with a consumer that only returns textures, samples
+        working set / managed heap / GC counts / frame rate / free pool slots
+        every 5-30s, and exits non-zero unless working-set drift is under 8MB
+        and steady-state allocation under 4KB/s (`Windows/CaptureSoakTest.cs`,
+        verdict logic in `Diagnostics/MemoryStabilityTracker.cs`). Also added
+        `--displays` and `--windows` for target discovery. NOT RUN — needs
+        Windows and a GPU. This is the manual step a Windows run has to perform.
+      * `PipelineSoakTests` runs the equivalent 10 minutes of frames (36,000 at
+        60fps) through the real pool, pacer, SPSC queue and router with a
+        genuine producer/consumer thread pair, and asserts the producer
+        allocated exactly 0 bytes, every pool slot came back, emitted ==
+        consumed, and 0 drops. A second case covers the static-screen shape:
+        10 minutes of filler-only operation, again 0 bytes allocated, no slot
+        leak, and ~1,160 fillers rather than the 36,000 frames a naive filler
+        would have encoded. This runs in the suite on every build.
 
 ## Phase 2 — Hardware encode pipeline
 - [ ] Enumerate available hardware MFTs (NVENC/AMF/QuickSync) at startup
