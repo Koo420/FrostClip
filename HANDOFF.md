@@ -87,8 +87,9 @@ the Engine is merely armed), and `build.sh` exists alongside `build.ps1`.
    bit the settings loader (an older settings file would have crashed startup)
    and will bite the IPC contracts the same way. Coalesce, or make every field
    non-nullable with a required value.
-2. **The default JSON encoder escapes `+` as `+`**, which made every hotkey
-   in the settings file read `"Alt+F10"`. `SettingsStore` uses a relaxed
+2. **The default JSON encoder escapes the plus sign** as a `\u002B` escape
+   sequence, which made every hotkey in the settings file read
+   `"Alt\u002BF10"`. `SettingsStore` uses a relaxed
    encoder; do the same anywhere a human reads the JSON.
 3. **`JsonSerializerOptions` are frozen once passed to a source-gen context**, so
    build the options and the context once, statically.
