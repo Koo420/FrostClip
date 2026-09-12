@@ -310,7 +310,36 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       rests on the API choice rather than on a test run here; the Windows
       verification step is to launch a fullscreen-exclusive title and confirm
       `--encode-test`-style hotkey firing while it has focus.
-- [ ] Settings schema + persistence (JSON in %AppData%)
+- [x] Settings schema + persistence (JSON in %AppData%)
+      `Frost.Shared/Settings/FrostSettings.cs` covers everything the spec's
+      Settings section lists — capture target/fps/cursor/border, codec + encoder
+      choice + bitrate + rate control + keyframe interval, system and mic audio
+      with gain, the opt-in autoclip knobs, storage location + disk cap +
+      oldest-first cleanup + a "protect recent" guard, ring-buffer memory cap and
+      headroom, autostart and start-minimised, theme/accent/Mica, and the hotkey
+      list. `SettingsStore` reads and writes `%AppData%\Frost\settings.json`.
+      Two rules shaped it. A bad settings file must never stop the Engine from
+      recording: out-of-range values are clamped and *reported* rather than
+      rejected (a hand-edited `fps: 9000` gives a working recorder at 480 and a
+      log line, not a dead process), an unparseable file falls back to defaults
+      and is kept aside as `settings.json.broken` rather than deleted — it may
+      hold hotkeys the user spent time on — and one bad hotkey line does not
+      disable the others. And writes are atomic (temp file plus replace), because
+      the window where no settings file exists is what turns a crash into lost
+      configuration.
+      Two real bugs the tests caught, both worth recording:
+      * System.Text.Json's **source generator does not run property
+        initialisers** — a section absent from the file deserialises as `null`,
+        not as its default. A settings file written by an older build is missing
+        whole sections, so the most ordinary upgrade there is would have thrown
+        on startup. Every section is now coalesced in `Normalise`.
+      * The default JSON encoder escapes `+` as `\u002B`, which rendered every
+        hotkey as `"Alt\u002BF10"` in a file that is meant to be hand-editable.
+        Fixed with a relaxed encoder ("unsafe" refers to embedding JSON in HTML;
+        this is a local file).
+      Verified: 19 tests including full round-trip, older-file and newer-file
+      handling, the quarantine path, and a case that clamps 13 bad values at
+      once and asserts every one is reported.
 - [ ] Named-pipe IPC server in Engine; basic client in Shell; round-trip tested
 
 ## Phase 5 — Full-session recording + autoclip heuristics
