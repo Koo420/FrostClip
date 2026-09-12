@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Frost.Engine.Capture;
 using Frost.Engine.Diagnostics;
 using Frost.Engine.Encoding;
+using Frost.Engine.Windows.Encode;
 
 namespace Frost.Engine.Windows;
 
@@ -35,6 +36,7 @@ internal static partial class EngineHost
         {
             "--soak" => RunDiagnostic(log => Soak(args, log)),
             "--encoders" => RunDiagnostic(ListEncoders),
+            "--encode-test" => RunDiagnostic(log => EncodeTest(args, log)),
             "--displays" => RunDiagnostic(ListDisplays),
             "--windows" => RunDiagnostic(ListWindows),
             "--help" or "-h" or "/?" => RunDiagnostic(PrintUsage),
@@ -111,6 +113,107 @@ internal static partial class EngineHost
         }
     }
 
+    /// <summary>
+    /// Records the primary display for a few seconds and writes an MP4, proving
+    /// the whole chain: WGC capture, hardware NV12 conversion, hardware encode,
+    /// and the Sink Writer muxing already-encoded samples.
+    /// </summary>
+    private static int EncodeTest(string[] args, IEngineLog log)
+    {
+        var seconds = 10.0;
+        if (args.Length > 1 && !double.TryParse(args[1], out seconds))
+        {
+            log.Error($"'{args[1]}' is not a number of seconds.");
+            return 1;
+        }
+
+        if (seconds is <= 0 or > 3600)
+        {
+            log.Error("Duration must be between 0 and 3600 seconds.");
+            return 1;
+        }
+
+        var output = args.Length > 2
+            ? args[2]
+            : Path.Combine(Path.GetTempPath(), $"frost-encode-test-{DateTime.Now:yyyyMMdd-HHmmss}.mp4");
+
+        using var mediaFoundation = new MediaFoundationRuntime(log);
+        using var device = GraphicsDevice.Create(CaptureTarget.PrimaryMonitor, log);
+
+        var captureConfig = new CaptureConfiguration
+        {
+            Target = CaptureTarget.PrimaryMonitor,
+            TargetFps = 60,
+        };
+
+        // Counts samples before the muxer exists, because the muxer needs the
+        // encoder's media type and the encoder only has one after it starts.
+        var counter = new CountingSampleSink();
+
+        using var pipeline = VideoEncodePipeline.Start(
+            device,
+            captureConfig,
+            new EncoderPreferences { Codec = VideoCodec.H264 },
+            (width, height) => EncoderSettings.For(VideoCodec.H264, width, height, captureConfig.TargetFps),
+            counter,
+            log);
+
+        using var encodedType = pipeline.GetEncodedMediaType();
+        using var muxer = new Mp4Muxer(output, encodedType, log);
+        pipeline.SetSampleSink(muxer);
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (clock.Elapsed < TimeSpan.FromSeconds(seconds))
+        {
+            Thread.Sleep(500);
+
+            if (!pipeline.IsCaptureRunning)
+            {
+                log.Error("Capture stopped early.");
+                break;
+            }
+        }
+
+        pipeline.Stop();
+        muxer.Finish(TimeSpan.FromSeconds(15));
+
+        var info = new FileInfo(output);
+        log.Info(
+            $"captured={pipeline.FramesCaptured} encoded={pipeline.FramesEncoded} " +
+            $"keyframes={pipeline.KeyFramesEncoded} " +
+            $"dropped(capture)={pipeline.FramesDroppedByCapture} " +
+            $"dropped(encode)={pipeline.FramesDroppedByEncoder} " +
+            $"written={muxer.SamplesWritten} refused={muxer.SamplesRefused}");
+
+        if (!info.Exists || info.Length < 1024)
+        {
+            log.Error($"{output} was not written, or is too small to be a real recording.");
+            return 4;
+        }
+
+        log.Info($"Wrote {output} ({info.Length / (1024.0 * 1024.0):F2}MB).");
+
+        if (pipeline.KeyFramesEncoded == 0)
+        {
+            log.Error("No keyframes were produced; clips could not be trimmed from this stream.");
+            return 5;
+        }
+
+        return 0;
+    }
+
+    /// <summary>Counts samples produced before the real sink is attached.</summary>
+    private sealed class CountingSampleSink : IEncodedSampleSink
+    {
+        internal long Samples { get; private set; }
+
+        public bool TryWrite(ReadOnlySpan<byte> data, long timestampTicks, long durationTicks, bool isKeyFrame)
+        {
+            Samples++;
+            return true;
+        }
+    }
+
     private static int ListDisplays(IEngineLog log)
     {
         foreach (var display in DisplayEnumerator.Displays())
@@ -142,6 +245,8 @@ internal static partial class EngineHost
               (no arguments)      run resident (tray)
               --soak [minutes]    capture soak test, default 10 minutes; exit 0 if memory is flat
               --encoders          list hardware encoders and the one Frost would pick
+              --encode-test [s] [out.mp4]
+                                  record the primary display and write an MP4
               --displays          list capture-able displays
               --windows           list capture-able windows
               --help              this text

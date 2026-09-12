@@ -18,6 +18,14 @@ namespace Frost.Engine.Windows;
 /// user understanding the problem and filing a bug.
 /// </para>
 /// </remarks>
+/// <summary>
+/// An enumerated encoder together with the activation object needed to create it.
+/// </summary>
+internal sealed record DiscoveredEncoder(EncoderDescriptor Descriptor, IMFActivate Activate) : IDisposable
+{
+    public void Dispose() => Activate.Dispose();
+}
+
 internal sealed class MediaFoundationEncoderEnumerator
 {
     private readonly IEngineLog _log;
@@ -29,9 +37,17 @@ internal sealed class MediaFoundationEncoderEnumerator
     /// included so callers can explain what was rejected; they are never
     /// selectable (<see cref="EncoderSelector"/> filters them out).
     /// </summary>
-    internal List<EncoderDescriptor> Enumerate()
+    internal List<EncoderDescriptor> Enumerate() =>
+        EnumerateActivatable().Select(e => e.Descriptor).ToList();
+
+    /// <summary>
+    /// Enumeration that keeps each MFT's <c>IMFActivate</c>, so the chosen
+    /// encoder can actually be created. The caller owns the returned activates
+    /// and must dispose them.
+    /// </summary>
+    internal List<DiscoveredEncoder> EnumerateActivatable()
     {
-        var results = new List<EncoderDescriptor>();
+        var results = new List<DiscoveredEncoder>();
 
         foreach (var codec in new[] { VideoCodec.H264, VideoCodec.Hevc, VideoCodec.Av1 })
         {
@@ -49,16 +65,16 @@ internal sealed class MediaFoundationEncoderEnumerator
         }
         else
         {
-            foreach (var descriptor in results)
+            foreach (var entry in results)
             {
-                _log.Info($"Encoder: {descriptor}");
+                _log.Info($"Encoder: {entry.Descriptor}");
             }
         }
 
         return results;
     }
 
-    private void Collect(VideoCodec codec, bool hardware, List<EncoderDescriptor> results)
+    private void Collect(VideoCodec codec, bool hardware, List<DiscoveredEncoder> results)
     {
         // Input NV12 / output the codec's subtype: the shape every hardware
         // encoder MFT advertises, and the shape Frost actually feeds it.
@@ -108,16 +124,22 @@ internal sealed class MediaFoundationEncoderEnumerator
                     continue;
                 }
 
-                using var activate = new IMFActivate(activatePointer);
+                var activate = new IMFActivate(activatePointer);
                 var descriptor = Describe(activate, codec, hardware, results.Count);
 
                 // Two codecs can be served by one MFT; do not list it twice.
-                if (!results.Any(existing =>
-                        existing.Codec == descriptor.Codec &&
-                        existing.IsHardware == descriptor.IsHardware &&
-                        string.Equals(existing.Name, descriptor.Name, StringComparison.OrdinalIgnoreCase)))
+                var duplicate = results.Any(existing =>
+                    existing.Descriptor.Codec == descriptor.Codec &&
+                    existing.Descriptor.IsHardware == descriptor.IsHardware &&
+                    string.Equals(existing.Descriptor.Name, descriptor.Name, StringComparison.OrdinalIgnoreCase));
+
+                if (duplicate)
                 {
-                    results.Add(descriptor);
+                    activate.Dispose();
+                }
+                else
+                {
+                    results.Add(new DiscoveredEncoder(descriptor, activate));
                 }
             }
         }

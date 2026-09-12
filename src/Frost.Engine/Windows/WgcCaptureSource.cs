@@ -104,6 +104,31 @@ internal sealed class WgcCaptureSource : ICaptureSource, IFrameCopier
     /// </summary>
     internal TexturePool? CurrentTexturePool => _texturePool;
 
+    /// <summary>
+    /// Managed wrapper for a pool texture handle, for the encode stage's colour
+    /// conversion. Null when the handle is not from the current pool, which
+    /// happens for a frame in flight across a resize.
+    /// </summary>
+    internal ID3D11Texture2D? ResolveSlotTexture(nint handle)
+    {
+        var pool = _texturePool;
+        if (pool is null)
+        {
+            return null;
+        }
+
+        var textures = _slotTextures;
+        for (var i = 0; i < pool.Capacity && i < textures.Length; i++)
+        {
+            if (pool.HandleAt(i) == handle)
+            {
+                return textures[i];
+            }
+        }
+
+        return null;
+    }
+
     public void Start(IFrameSink sink)
     {
         ArgumentNullException.ThrowIfNull(sink);

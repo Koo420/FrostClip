@@ -118,8 +118,57 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       `Frost.Engine.exe --encoders` prints what was found and what Frost would
       pick. Verified: 24 selection/vendor/FOURCC tests pass on this host;
       the MFTEnumEx call itself compiles but was not executed (needs Windows).
-- [ ] Encode captured frames via Media Foundation Sink Writer using hw MFT
-- [ ] Graceful, clearly-surfaced error if no hardware encoder is present
+- [x] Encode captured frames via Media Foundation Sink Writer using hw MFT
+      **Deviation, and the reason for it.** The spec's later constraints decide
+      this one: Phase 3 needs a ring buffer of the trailing N seconds of
+      *encoded* data, and Phase 5 needs full-session recording running at the
+      same time "without double encoding". The Sink Writer gives no access to
+      the encoded frames, so using it as the encoder would force either a second
+      encode or a re-encode on every clip. So Frost drives the hardware encoder
+      MFT directly (`Windows/Encode/HardwareVideoEncoder.cs`) and uses the Sink
+      Writer as a pure **muxer** (`Windows/Encode/Mp4Muxer.cs`): the stream's
+      input media type is the same H.264 type as its output, so no transform is
+      inserted and already-encoded samples pass straight into the MP4 sink. One
+      encode, any number of destinations (`FanOutSampleSink`).
+      Pieces: `Nv12Converter` does BGRA→NV12 on the GPU's video processor
+      (`VideoProcessorBlt`) rather than letting the Sink Writer insert
+      Microsoft's *software* colour converter — which would have put a
+      per-pixel conversion on the CPU for every frame; async-MFT handshake
+      (`MF_TRANSFORM_ASYNC_UNLOCK` + `METransformNeedInput`/`HaveOutput`), which
+      is what NVENC/AMF/QuickSync actually are, with a sync fallback;
+      `MFT_MESSAGE_SET_D3D_MANAGER` so the encoder shares our D3D11 device and
+      no frame leaves VRAM; `ICodecAPI` for rate control, GOP size and low
+      latency, hand-written because Vortice does not project it, with every
+      setter best-effort so a driver refusing a tuning hint cannot stop a
+      recording; the muxer takes its media type from the encoder so the MP4
+      carries real SPS/PPS.
+      Threads: `frost-capture` → `frost-encode` → `frost-mux`. Disk I/O is on
+      the mux thread only; the encode thread copies into a pre-allocated
+      `SampleArena` under a lock held for a memcpy and nothing else.
+      Allocation: input samples and DXGI buffers are created once per NV12 pool
+      texture and reused; the encoded-byte copy buffer is grown at most a few
+      times in the first second. Known residual: where the MFT provides its own
+      output samples (hardware MFTs generally do) the managed wrapper per sample
+      is unavoidable through the projection — it is disposed immediately so it
+      stays a short-lived Gen0 object. Recorded here rather than glossed over;
+      Phase 9 measures whether it matters.
+      `Frost.Engine.exe --encode-test [seconds] [out.mp4]` records the primary
+      display and writes an MP4, and fails with a distinct exit code if no
+      keyframes were produced (which would make clip trimming impossible).
+      Verified: compiles; `SampleArena` has 20 tests including a 20,000-sample
+      wrap-corruption run and a zero-allocation check, `FanOutSampleSink` 5.
+      The MFT path itself was not executed — needs Windows and a GPU.
+- [x] Graceful, clearly-surfaced error if no hardware encoder is present
+      `NoHardwareEncoderException` names the requested codec, lists any other
+      codecs the GPU *can* do in hardware and points at Settings, or — when
+      there is no hardware encoder at all — says to check the driver and which
+      GPU the display is plugged into. Software encoders that were found are
+      listed explicitly as ignored, with the reason, so the user sees a decision
+      rather than a missing feature. `HardwareVideoEncoder`'s constructor
+      re-checks `IsHardware` so nothing downstream of the selector can start a
+      software encode even by mistake.
+      Verified: 5 tests covering each message case and the never-select-software
+      rule.
 - [ ] Verify GPU "Video Encode" engine is the one doing the work, not CPU/3D engine
 
 ## Phase 3 — Ring buffer + instant clip
