@@ -223,7 +223,37 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       Verified: 31 tests, including a concurrent writer/snapshot run, the
       pinned-eviction case above, and a zero-allocation check on the write path
       (which runs on the encode thread the whole time the Engine is armed).
-- [ ] Hotkey → finalize trailing N seconds to an MP4 on disk
+- [x] Hotkey → finalize trailing N seconds to an MP4 on disk
+      `Clips/ClipService.cs` (portable) takes requests and writes them on a
+      `frost-clip` thread; `Windows/Encode/Mp4ClipWriter.cs` muxes a pinned
+      snapshot into an MP4 through `Mp4Muxer`. No encoding happens on the save
+      path — the frames were encoded once as they were captured — so saving a
+      30s clip costs roughly what copying 45MB costs, and never touches the
+      GPU's encoder while the game is still using it.
+      `Request()` is built for the hotkey hook it will be called from: it drops a
+      struct into a bounded queue, raises `ClipRequested` synchronously (this is
+      what drives the sub-150ms toast — feedback on the keypress, not after the
+      disk catches up), and returns. A test asserts the event fires on the
+      calling thread before any write happens, and that a second request while
+      one is writing returns in under 250ms.
+      Writes are serialised because each pins the ring buffer; a test with an
+      overlap-detecting writer confirms it. A full queue drops extras rather
+      than writing fifty near-identical files from a held-down key. An empty
+      buffer reports "the buffer is still filling" rather than writing an
+      unplayable file, and a failed write does not take the service down — the
+      next hotkey press still works.
+      `ClipNaming` handles what actually breaks on Windows: reserved device
+      names (`CON.mp4` cannot exist and the failure is baffling), characters a
+      game title may contain that a path may not, trailing dots and spaces that
+      Windows silently drops, and numbered suffixes so two clips in the same
+      second cannot clobber each other.
+      `Frost.Shared/Clips/ClipMetadataStore.cs` writes a sidecar JSON beside each
+      file, via temp-file-and-move so an interrupted write cannot leave a
+      half-written sidecar; a corrupt or missing sidecar degrades the gallery
+      entry rather than hiding the clip. Source-generated JSON, because the
+      Engine is AOT.
+      Verified: 46 tests across naming, the service and the sidecar store. The
+      MP4 muxing itself compiles but was not executed — needs Windows.
 - [ ] Multiple duration presets bound to different hotkeys simultaneously
 
 ## Phase 4 — Hotkeys, settings, IPC

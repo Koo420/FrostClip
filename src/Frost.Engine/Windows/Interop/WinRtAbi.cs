@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using WinRT;
 
@@ -20,7 +21,8 @@ internal static class WinRtAbi
     /// Takes a reference to <paramref name="projected"/>'s default interface. The
     /// caller owns the returned pointer and must release it.
     /// </summary>
-    internal static nint AddRefDefaultInterface<T>(T projected)
+    internal static nint AddRefDefaultInterface<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields)] T>(T projected)
         where T : class
     {
         ArgumentNullException.ThrowIfNull(projected);
