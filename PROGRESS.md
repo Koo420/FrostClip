@@ -100,7 +100,24 @@ The loop is running in a **Linux** container. Consequences, and how they are han
         would have encoded. This runs in the suite on every build.
 
 ## Phase 2 — Hardware encode pipeline
-- [ ] Enumerate available hardware MFTs (NVENC/AMF/QuickSync) at startup
+- [x] Enumerate available hardware MFTs (NVENC/AMF/QuickSync) at startup
+      `Windows/MediaFoundationEncoderEnumerator.cs` runs `MFTEnumEx` over
+      `MFT_CATEGORY_VIDEO_ENCODER` for H.264, HEVC and AV1, in separate hardware
+      and software passes so the failure message can name the software encoders
+      that were deliberately ignored. Vendor comes from
+      `MFT_ENUM_HARDWARE_VENDOR_ID_Attribute` (`VEN_10DE` etc.), falling back to
+      the friendly name for drivers that omit it. `MFStartup`/`MFShutdown` are
+      refcounted once per process in `MediaFoundationRuntime`.
+      Selection policy is platform-agnostic in `Encoding/EncoderSelector.cs` and
+      tested: hardware-only, explicit-name override, adapter affinity (so a
+      hybrid laptop does not encode on the other GPU and copy every frame across),
+      codec fallback order, and MF's own ordering as the tiebreak.
+      AV1's subtype GUID is computed from the `AV01` FOURCC rather than pasted
+      in; the template is checked against four independently known subtype GUIDs
+      (`FourCcTests`).
+      `Frost.Engine.exe --encoders` prints what was found and what Frost would
+      pick. Verified: 24 selection/vendor/FOURCC tests pass on this host;
+      the MFTEnumEx call itself compiles but was not executed (needs Windows).
 - [ ] Encode captured frames via Media Foundation Sink Writer using hw MFT
 - [ ] Graceful, clearly-surfaced error if no hardware encoder is present
 - [ ] Verify GPU "Video Encode" engine is the one doing the work, not CPU/3D engine

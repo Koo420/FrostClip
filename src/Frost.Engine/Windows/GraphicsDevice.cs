@@ -46,6 +46,12 @@ internal sealed unsafe partial class GraphicsDevice : IDisposable
     internal string AdapterDescription { get; }
 
     /// <summary>
+    /// PCI vendor ID of the adapter capture runs on, so the encode stage can
+    /// prefer an encoder on the same GPU and avoid a cross-adapter copy per frame.
+    /// </summary>
+    internal uint AdapterVendorId => Adapter.Description1.VendorId;
+
+    /// <summary>
     /// The same device as a WinRT <c>IDirect3DDevice</c>, which is what
     /// <c>Direct3D11CaptureFramePool</c> takes.
     /// </summary>

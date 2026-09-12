@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Frost.Engine.Capture;
 using Frost.Engine.Diagnostics;
+using Frost.Engine.Encoding;
 
 namespace Frost.Engine.Windows;
 
@@ -33,6 +34,7 @@ internal static partial class EngineHost
         return args[0] switch
         {
             "--soak" => RunDiagnostic(log => Soak(args, log)),
+            "--encoders" => RunDiagnostic(ListEncoders),
             "--displays" => RunDiagnostic(ListDisplays),
             "--windows" => RunDiagnostic(ListWindows),
             "--help" or "-h" or "/?" => RunDiagnostic(PrintUsage),
@@ -69,6 +71,46 @@ internal static partial class EngineHost
         return CaptureSoakTest.Run(config, TimeSpan.FromMinutes(minutes), log);
     }
 
+    /// <summary>
+    /// Reports what hardware encoders exist and which one Frost would pick, so
+    /// the "no hardware encoder" case is diagnosable without starting a capture.
+    /// </summary>
+    private static int ListEncoders(IEngineLog log)
+    {
+        using var mediaFoundation = new MediaFoundationRuntime(log);
+        var discovered = new MediaFoundationEncoderEnumerator(log).Enumerate();
+
+        uint? adapterVendorId = null;
+        try
+        {
+            using var device = GraphicsDevice.Create(CaptureTarget.PrimaryMonitor, log);
+            adapterVendorId = device.AdapterVendorId;
+            log.Info($"Capture adapter: {device.AdapterDescription} (VEN_{adapterVendorId:X4}).");
+        }
+        catch (Exception ex)
+        {
+            log.Warn("Could not open a graphics device; adapter affinity will be ignored.", ex);
+        }
+
+        var codecs = EncoderSelector.AvailableCodecs(discovered);
+        log.Info(codecs.Count == 0
+            ? "Hardware codecs available: none."
+            : $"Hardware codecs available: {string.Join(", ", codecs)}.");
+
+        var preferences = new EncoderPreferences { CaptureAdapterVendorId = adapterVendorId };
+
+        try
+        {
+            log.Info($"Frost would use: {EncoderSelector.Select(discovered, preferences)}");
+            return 0;
+        }
+        catch (NoHardwareEncoderException ex)
+        {
+            log.Error(ex.Message);
+            return 3;
+        }
+    }
+
     private static int ListDisplays(IEngineLog log)
     {
         foreach (var display in DisplayEnumerator.Displays())
@@ -99,6 +141,7 @@ internal static partial class EngineHost
 
               (no arguments)      run resident (tray)
               --soak [minutes]    capture soak test, default 10 minutes; exit 0 if memory is flat
+              --encoders          list hardware encoders and the one Frost would pick
               --displays          list capture-able displays
               --windows           list capture-able windows
               --help              this text
