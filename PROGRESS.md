@@ -280,7 +280,36 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       57 hotkey tests in total.
 
 ## Phase 4 — Hotkeys, settings, IPC
-- [ ] Low-level keyboard hook works while a fullscreen-exclusive game has focus
+- [x] Low-level keyboard hook works while a fullscreen-exclusive game has focus
+      `Windows/KeyboardHook.cs`: `WH_KEYBOARD_LL` installed on a dedicated
+      `frost-hotkeys` thread with its own message loop (a low-level hook's
+      callback is dispatched on the installing thread, and only while that
+      thread pumps messages — sharing a thread would put keystroke handling
+      behind whatever else the Engine was doing). `RegisterHotKey` is not used
+      because it delivers through the window message queue, which a
+      fullscreen-exclusive game owning input focus can leave not arriving at
+      all — exactly the case that matters.
+      The callback is on the critical path of every keystroke on the machine,
+      including the ones the user is aiming with, and Windows silently unhooks a
+      callback that overruns. So it reads modifier state, calls the router
+      (which only queues) and returns — no allocation, no lock, no I/O — and it
+      catches everything, because an exception escaping a hook callback tears
+      down the process. `CallNextHookEx` is always called and the key is never
+      swallowed.
+      The hook is not permanent: it can be lost to a timeout, a UAC prompt or a
+      session switch, with no notification, and a silently dead hook looks to
+      the user like the app has given up. `Hotkeys/HookWatchdog.cs` detects it
+      by comparing when our hook last saw a key against when Windows last saw
+      any input (`GetLastInputInfo`), and the hook thread reinstalls on a posted
+      message. That logic is platform-agnostic and tested: healthy hook left
+      alone, idle machine not mistaken for a dead hook, input that never reached
+      us treated as death, no reinstall loop, and a working reinstall ending the
+      attempts (10 tests).
+      Not executed — installing a global hook needs Windows. This is the one
+      task whose headline claim ("works under a fullscreen-exclusive game")
+      rests on the API choice rather than on a test run here; the Windows
+      verification step is to launch a fullscreen-exclusive title and confirm
+      `--encode-test`-style hotkey firing while it has focus.
 - [ ] Settings schema + persistence (JSON in %AppData%)
 - [ ] Named-pipe IPC server in Engine; basic client in Shell; round-trip tested
 
