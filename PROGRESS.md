@@ -434,7 +434,39 @@ The loop is running in a **Linux** container. Consequences, and how they are han
         byte per iteration — the smallest object .NET can allocate is 24 bytes, so
         anything allocating even once per iteration exceeds it by an order of
         magnitude. Same guarantee, no false failures.
-- [ ] Audio loudness-spike bookmark detection (opt-in, off by default)
+- [x] Audio loudness-spike bookmark detection (opt-in, off by default)
+      `Audio/LoudnessSpikeDetector.cs` compares a ~300ms short-term RMS against a
+      slow exponential moving average of that level. Off by default, and
+      `AutoclipBookmarker` constructs no detector at all when disabled — the
+      default configuration costs one field check per audio block.
+      The three guards are what stop a loudness heuristic being useless in
+      practice, and each has a test:
+      * An **absolute floor** (-45 dBFS). Without it a near-silent baseline makes
+        any sound look like a 40dB jump, so un-pausing a game or a menu click in a
+        quiet lobby would mark every time.
+      * A **warm-up period**, so the first loud sound after launch is not always a
+        "moment".
+      * **Rate limiting**, so one firefight is one mark rather than fifty. A
+        separate test confirms a *sustained* loud section produces one or two marks
+        and then stops, because the baseline catches up.
+      The baseline is updated *after* the comparison, so a spike is measured
+      against the level that preceded it rather than one it has already dragged
+      upward — tested directly (a 300ms +20dB window must not move the baseline
+      more than a few dB).
+      Deliberately the whole of the automatic path: a spike becomes a **bookmark**
+      and nothing else. It never saves a clip, never starts a recording and never
+      touches the ring buffer — a heuristic that is sometimes wrong may add a
+      timestamp the user ignores, but must not fill a drive with clips of nothing.
+      There is a test asserting the type's public surface stays that narrow.
+      No OCR, no killfeed parsing, no per-game templates: that needs
+      per-frame work, breaks with every game patch, and is exactly the fragile
+      cleverness the spec rules out. The bookmark feature is the answer if it is
+      ever asked for again.
+      Verified: 27 detector tests plus 10 bookmarker tests, including irregular
+      WASAPI-style block sizes (the device hands over whatever it has, not tidy
+      round numbers), digital silence without infinities, 1/2/6 channel layouts,
+      an end-to-end mark landing in a real session recording's sidecar, and
+      zero-allocation on both the enabled and disabled paths.
 - [ ] Manual "bookmark" hotkey tags a timestamp without a full export
 
 ## Phase 6 — Audio

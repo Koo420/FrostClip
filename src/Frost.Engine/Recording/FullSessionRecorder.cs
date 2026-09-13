@@ -28,7 +28,7 @@ namespace Frost.Engine.Recording;
 /// first frame in the file — stated plainly rather than hidden, and reported by
 /// <see cref="DiscardedBeforeFirstKeyFrame"/>.</para>
 /// </remarks>
-public sealed class FullSessionRecorder : IEncodedSampleSink, IDisposable
+public sealed class FullSessionRecorder : IEncodedSampleSink, IBookmarkTarget, IDisposable
 {
     private readonly Func<string, ISessionWriter> _writerFactory;
     private readonly IEngineLog _log;
