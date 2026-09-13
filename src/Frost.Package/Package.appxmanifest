@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  Frost's MSIX package manifest.
+
+  Two things here are load-bearing and easy to break silently:
+
+  * The StartupTask TaskId must match AutostartPlan.StartupTaskId exactly.
+    StartupTask.GetAsync throws at runtime otherwise, and the exception does not
+    say that the id is the problem. FrostPackageTests asserts they match.
+
+  * StartupTask is the *only* autostart mechanism the packaged build uses. No
+    scheduled task and no Run key are declared, because an MSIX package cannot
+    remove either on uninstall and an orphan pointing at a deleted executable
+    makes Windows report a failure at every logon.
+
+  Capabilities are deliberately minimal: graphicsCapture for Windows.Graphics.Capture,
+  microphone only because the mic track is opt-in, and nothing else. No
+  broadFileSystemAccess - clips go to the user's Videos folder or a folder they
+  pick, both of which the file picker grants without it.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap5 desktop rescap">
+
+  <Identity
+    Name="Frost.Clipper"
+    Publisher="CN=Frost"
+    Version="0.1.0.0" />
+
+  <Properties>
+    <DisplayName>Frost</DisplayName>
+    <PublisherDisplayName>Frost</PublisherDisplayName>
+    <Description>Instant game clipping that does not cost you frames.</Description>
+    <Logo>Images\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <!--
+      Windows 10 1903 is where Windows.Graphics.Capture shipped, and the Engine's
+      TargetPlatformMinVersion matches. MaxVersionTested is the SDK the projection
+      is built against.
+    -->
+    <TargetDeviceFamily
+      Name="Windows.Desktop"
+      MinVersion="10.0.18362.0"
+      MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-GB" />
+  </Resources>
+
+  <Applications>
+    <!--
+      The Shell is the entry point the user launches and the one with a tile. The
+      Engine is started by the Shell or by the startup task, and has no tile of
+      its own - it is a tray process, and a second tile for it would be confusing.
+    -->
+    <Application Id="FrostShell" Executable="Frost.Shell.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Frost"
+        Description="Instant game clipping that does not cost you frames."
+        BackgroundColor="transparent"
+        Square150x150Logo="Images\Square150x150Logo.png"
+        Square44x44Logo="Images\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Images\Wide310x150Logo.png" />
+        <uap:SplashScreen Image="Images\SplashScreen.png" />
+      </uap:VisualElements>
+
+      <Extensions>
+        <!--
+          Autostart. The user can disable this in Task Manager's Startup tab,
+          which is where they will look for it, and Windows removes it with the
+          package. Enabled=false so a fresh install does not start with Windows
+          until the user asks: a recorder that silently runs at every logon
+          without being told to is the behaviour people uninstall over.
+        -->
+        <uap5:Extension
+          Category="windows.startupTask"
+          Executable="Frost.Engine.exe"
+          EntryPoint="Windows.FullTrustApplication">
+          <uap5:StartupTask
+            TaskId="FrostEngineAutostart"
+            Enabled="false"
+            DisplayName="Frost" />
+        </uap5:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- Full trust: the Engine uses D3D11, Media Foundation and a global keyboard hook. -->
+    <rescap:Capability Name="runFullTrust" />
+
+    <!-- Windows.Graphics.Capture. -->
+    <uap:Capability Name="graphicsCapture" />
+
+    <!--
+      Only because the microphone track is opt-in. With it off, Frost never opens
+      a capture endpoint and Windows never shows the in-use indicator.
+    -->
+    <DeviceCapability Name="microphone" />
+  </Capabilities>
+</Package>

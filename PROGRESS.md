@@ -735,5 +735,41 @@ The loop is running in a **Linux** container. Consequences, and how they are han
 - [ ] Any budget miss investigated and fixed or explicitly justified
 
 ## Phase 10 — Packaging
+
+> **Cannot be completed on this build host.** Both tasks are about what a real
+> install and uninstall *do* on a real Windows machine, and neither the MSIX
+> tooling (`.wapproj` needs the Windows Application Packaging targets from Visual
+> Studio) nor an installed package exists here. The boxes stay unchecked rather
+> than being checked on the strength of a manifest that has never been built.
+>
+> What exists now:
+> * `src/Frost.Package/Package.appxmanifest` — the real manifest. `StartupTask`
+>   with `TaskId="FrostEngineAutostart"` and `Enabled="false"` on
+>   `Frost.Engine.exe`; capabilities exactly `runFullTrust`, `graphicsCapture`,
+>   `microphone` and deliberately not `broadFileSystemAccess`; MinVersion
+>   10.0.18362.0 to match `TargetPlatformMinVersion`.
+> * `src/Frost.Package/README.md` — the build command and what in the manifest is
+>   load-bearing and why.
+> * `tests/Frost.Engine.Tests/FrostPackageTests.cs` — 10 structural tests over the
+>   manifest. The one that matters most asserts
+>   `StartupTask/@TaskId == AutostartPlan.StartupTaskId`: `StartupTask.GetAsync`
+>   throws at runtime when they drift and the exception does not say why.
+> * `src/Frost.Engine/Startup/UninstallCheck.cs` — the orphan policy, with 13
+>   tests. `RegistryAutostart` and `ScheduledTask` are orphans (each keeps
+>   pointing at a deleted executable at every logon); settings, clips and logs are
+>   reported as kept-on-purpose, so "we left files behind" cannot be mistaken for
+>   "we left a broken autostart behind". A reinstall keeps the user's hotkeys and
+>   nobody's recordings get deleted because they uninstalled the recorder.
+>
+> Still to write on a Windows host: a `Frost.Package.wapproj`, and a
+> `--uninstall-check` verb wiring `UninstallCheck` to real registry and
+> filesystem enumeration (`HKCU\...\Run`, Task Scheduler, `%AppData%\Frost`,
+> the clip directory) so the second task can be verified by running one command
+> after an uninstall instead of by hand.
+>
+> **Genuine external dependency:** a package that installs without developer mode
+> needs signing — a trusted (EV or Store) code-signing certificate. That is a
+> human decision and a purchase, not something the loop can do.
+
 - [ ] MSIX package builds and installs cleanly
 - [ ] Uninstall leaves no orphaned scheduled tasks / registry autostart entries
