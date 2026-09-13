@@ -178,6 +178,50 @@ Add-Line "| GPU | $(Probe { (Get-CimInstance Win32_VideoController | ForEach-Obj
 Add-Line "| .NET SDK | $(Probe { dotnet --version }) |"
 Add-Line "| Capture length | ${Seconds}s |"
 
+# --- prerequisites ----------------------------------------------------------
+
+# Checked up front and reported as one clear line. Without this, a missing SDK
+# surfaces as three build steps failing with 0x8013... exit codes, which says
+# nothing about what to install.
+$sdkVersion = Probe { dotnet --version }
+$sdkOk = $sdkVersion -ne 'unknown' -and $sdkVersion -match '^(\d+)\.' -and [int]$Matches[1] -ge 8
+
+if (-not $sdkOk) {
+    $detail = if ($sdkVersion -eq 'unknown') {
+        'No .NET SDK was found on PATH.'
+    } else {
+        "Found .NET SDK $sdkVersion, but Frost targets net8.0 and needs 8.0 or later."
+    }
+
+    Add-Line ""
+    Add-Line "## Cannot run: no usable .NET SDK"
+    Add-Line ""
+    Add-Line $detail
+    Add-Line ""
+    Add-Line "Install it, reopen the terminal so PATH is picked up, and run this again:"
+    Add-Line ""
+    Add-Line '```'
+    Add-Line 'winget install Microsoft.DotNet.SDK.8'
+    Add-Line '```'
+    Add-Line ""
+    Add-Line "Or download the SDK (not the Runtime) from"
+    Add-Line "<https://dotnet.microsoft.com/download/dotnet/8.0>."
+    Add-Line ""
+    Add-Line "The WinUI 3 Shell additionally needs the Windows App SDK workload, and"
+    Add-Line "Phase 10's MSIX package needs MSBuild with the Windows Application Packaging"
+    Add-Line "tooling - both of which come with Visual Studio."
+
+    $report -join "`n" | Set-Content -Path $OutputPath -Encoding utf8
+
+    Write-Host ""
+    Write-Host $detail -ForegroundColor Red
+    Write-Host "  Install: winget install Microsoft.DotNet.SDK.8" -ForegroundColor Yellow
+    Write-Host "  Then reopen the terminal and run this script again." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Wrote $OutputPath"
+    exit 3
+}
+
 # --- build ------------------------------------------------------------------
 
 Invoke-Step -Name 'Build Engine, Shared and tests' `
