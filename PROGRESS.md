@@ -640,6 +640,48 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       `DashboardPage` that binds to this model — plus the `app.manifest` the
       csproj deliberately does not reference yet.
 - [ ] Clip gallery: thumbnails, rename, delete, reveal, quick trim
+      **Policy half done and tested; XAML pending a Windows host.**
+      Three portable pieces in `Frost.Shared/Shell/`.
+      `GalleryView.cs` — sort, filter, search. `OrderBy` is used deliberately
+      because it is a stable sort: two clips saved in the same second would
+      otherwise swap places on every refresh, and the thumbnails visibly shuffle
+      under the cursor. `EmptyReason` distinguishes "nothing recorded yet" from
+      "nothing matches your search", because telling someone with four hundred
+      clips and a typo to press Alt+F10 while playing is the kind of small
+      wrongness that makes an app feel careless. `SelectionAfterRemoving` keeps a
+      run of deletes going instead of landing on nothing after each one.
+      `ClipRename.cs` — validation, and a plan that names *both* files. Renaming
+      a clip is two moves, the video and its `.frost.json` sidecar; forgetting
+      the second is how a clip loses its bookmarks and its game name while
+      appearing to rename fine. The video moves first, because a sidecar without
+      a video is invisible and harmless where the reverse loses data.
+      Validation is stricter than the file system: a trailing dot or space is
+      refused rather than silently stripped by Windows into a name the user did
+      not type, and `CON`/`NUL`/`COM1` are refused because they fail at the
+      file-system layer with an error that never mentions reserved names.
+      `TrimPlanner.cs` — the one that carries the spec's "re-mux not re-encode".
+      A re-mux copies encoded samples untouched, so the output can only begin on
+      a keyframe; starting mid-GOP makes the first second unwatchable. The left
+      handle therefore snaps *backwards*, never to the nearest keyframe: at 7.4s
+      with keyframes every 2s, nearest would be 8s and would discard the 0.6s the
+      user was trying to keep, which is the one thing a trim UI must never do
+      silently. The extra footage at the front is harmless and the UI says
+      "starts 1.4s earlier to keep it lossless" rather than hiding it. The right
+      handle needs no alignment — a decoder stops where the samples stop.
+      Verified: 57 tests. The trim ones include the too-short check being applied
+      *after* alignment (a 0.4s request that alignment turns into a valid 2s clip
+      must be allowed), a keyframe index that does not cover the requested start
+      being refused rather than guessed at, and the binary search checked against
+      a linear scan across every quarter-second of a 100-second clip.
+      One finding worth keeping: `Path.GetInvalidFileNameChars` and
+      `Path.GetDirectoryName` report the *host's* rules, so on Linux they accept
+      `:` and `?` and do not split a backslash path at all. Frost validates names
+      for a Windows file system whatever it is compiled on, so the rules are
+      written out explicitly — which is both more correct and what makes them
+      testable here.
+      Left for Windows: the thumbnail grid and its cache, reveal-in-Explorer
+      (`SHOpenFolderAndSelectItems`), the trim UI, and the Sink Writer re-mux
+      that executes a `TrimRange`.
 - [ ] Settings UI covering everything in Phase 4's schema
 - [ ] Mica/animations verified to be inactive while a game window has focus
 
