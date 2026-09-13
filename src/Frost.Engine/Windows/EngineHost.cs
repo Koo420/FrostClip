@@ -4,6 +4,9 @@ using Frost.Engine.Diagnostics;
 using Frost.Engine.Encoding;
 using Frost.Engine.Windows.Encode;
 using Frost.Engine.Windows.Diagnostics;
+using Frost.Engine.Ipc;
+using Frost.Shared.Ipc;
+using Frost.Shared.Settings;
 
 namespace Frost.Engine.Windows;
 
@@ -37,6 +40,7 @@ internal static partial class EngineHost
         {
             "--soak" => RunDiagnostic(log => Soak(args, log)),
             "--encoders" => RunDiagnostic(ListEncoders),
+            "--ipc-server" => RunDiagnostic(RunIpcServer),
             "--encode-test" => RunDiagnostic(log => EncodeTest(args, log)),
             "--displays" => RunDiagnostic(ListDisplays),
             "--windows" => RunDiagnostic(ListWindows),
@@ -273,6 +277,50 @@ internal static partial class EngineHost
         }
     }
 
+    /// <summary>
+    /// Runs the IPC server until a key is pressed, so the Shell can be developed
+    /// and the channel exercised against a real Engine process.
+    /// </summary>
+    private static int RunIpcServer(IEngineLog log)
+    {
+        var loaded = SettingsStore.Load();
+
+        foreach (var correction in loaded.Corrections)
+        {
+            log.Warn($"Settings correction: {correction}");
+        }
+
+        var commands = new DiagnosticEngineCommands(loaded.Settings, log);
+        var server = new IpcServer(commands, log);
+
+        try
+        {
+            server.Start();
+            log.Info(
+                $"IPC server running on '{FrostIpc.PipeName}' " +
+                $"(protocol v{FrostIpc.ProtocolVersion}). Press Ctrl+C to stop.");
+
+            using var stop = new ManualResetEventSlim(false);
+            Console.CancelKeyPress += (_, args) =>
+            {
+                args.Cancel = true;
+                stop.Set();
+            };
+
+            stop.Wait();
+
+            log.Info(
+                $"Served {server.ClientsAccepted} client(s), " +
+                $"{server.MessagesReceived} received / {server.MessagesSent} sent, " +
+                $"{server.HandlerFailures} handler failure(s).");
+            return 0;
+        }
+        finally
+        {
+            server.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+    }
+
     private static int ListDisplays(IEngineLog log)
     {
         foreach (var display in DisplayEnumerator.Displays())
@@ -304,6 +352,7 @@ internal static partial class EngineHost
               (no arguments)      run resident (tray)
               --soak [minutes]    capture soak test, default 10 minutes; exit 0 if memory is flat
               --encoders          list hardware encoders and the one Frost would pick
+              --ipc-server        run the Engine/Shell IPC server until Ctrl+C
               --encode-test [s] [out.mp4]
                                   record the primary display and write an MP4
               --displays          list capture-able displays

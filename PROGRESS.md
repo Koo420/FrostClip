@@ -340,7 +340,55 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       Verified: 19 tests including full round-trip, older-file and newer-file
       handling, the quarantine path, and a case that clamps 13 bad values at
       once and asserts every one is reported.
-- [ ] Named-pipe IPC server in Engine; basic client in Shell; round-trip tested
+- [x] Named-pipe IPC server in Engine; basic client in Shell; round-trip tested
+      `Frost.Shared/Ipc/` holds the contracts, framing and client;
+      `Frost.Engine/Ipc/IpcServer.cs` the server, behind an `IEngineCommands`
+      seam the Engine host implements and tests fake. This is the one part of
+      Frost's cross-process surface that **genuinely runs on this host** — named
+      pipes work on Linux as Unix domain sockets — so the round trip is executed,
+      not just type-checked.
+      Framing is length-prefixed JSON with every read looping until it has the
+      bytes it asked for. That is the single most common way hand-rolled IPC
+      fails: it works perfectly until a message crosses a buffer boundary under
+      load. There is a test that delivers a frame one byte at a time, and another
+      that splits the length prefix itself. The length prefix is validated before
+      anything is allocated for it, so a corrupt byte cannot turn into a 2GB
+      allocation inside the process recording someone's game.
+      The Engine's contract is that nothing the Shell does can affect a
+      recording: a handler that throws becomes a `Failed` reply and the channel
+      keeps working, a dropped connection is an expected event, a malformed
+      message is refused with a reason rather than dereferenced, and a Shell that
+      is killed three times over leaves the Engine serving the fourth. Replies
+      are matched by correlation id, so a notification arriving mid-request is
+      not mistaken for the reply — tested by interleaving 50 notifications with
+      50 requests. Writes are serialised, because two writers on one pipe would
+      interleave bytes and corrupt both frames.
+      Client side: `IpcClient` fails fast with an actionable
+      `EngineUnavailableException` rather than hanging the UI, and
+      `EngineConnection` is the self-healing wrapper the Shell binds to — polls
+      status, reconnects with bounded backoff, and reports the Engine being
+      absent as an ordinary UI state. The one genuinely UI-specific concern,
+      marshalling onto the dispatcher, is a delegate the Shell supplies
+      (`dispatcherQueue.TryEnqueue`), which keeps all the logic in Shared where
+      it is testable rather than in a WinUI assembly that cannot build here.
+      A real bug the tests found: **`IpcServer.Start()` returned before the pipe
+      existed.** The Shell's usual sequence is "launch the Engine, then connect",
+      so that first connection could fail for no reason a user could understand.
+      The accept loop is now `LongRunning` (its own thread, not a pool thread it
+      could queue behind) and `Start()` waits until the pipe is genuinely up.
+      Also raised the connect timeout from 2s to 5s: a connect that fails because
+      the Shell's own pool was briefly busy during WinUI startup would look
+      exactly like the Engine not running.
+      `Frost.Engine.exe --ipc-server` runs the channel against a real process,
+      serving what works without capture (displays, windows, settings, the clip
+      library) and refusing the rest with a clear reason.
+      Verified: 51 IPC tests, all executing over real pipes, stable across five
+      consecutive full-suite runs. They are in one xUnit collection with
+      parallelisation disabled — run in parallel these timing-sensitive transport
+      tests starve each other's async continuations and fail in unrelated places.
+      Also removed a dangling `app.manifest` reference from `Frost.Shell.csproj`
+      that would have broken a Windows build; the WinUI app scaffolding arrives
+      with Phase 7.
 
 ## Phase 5 — Full-session recording + autoclip heuristics
 - [ ] Independent full-session recording toggle, no double-encode with ring buffer
