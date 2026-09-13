@@ -602,9 +602,43 @@ The loop is running in a **Linux** container. Consequences, and how they are han
 > toast) is Windows-only but *compiles* here, so it can be done to the same
 > standard as Phases 1–6; Phase 9 needs real hardware to measure; Phase 10 needs
 > Windows MSIX tooling.
-
+>
+> **Taking option 1.** Phases 8 and 10 are done to the extent this host allows, so
+> the remaining honest work is the Shell's policy layer. Each task below gets its
+> portable half built and tested here; the box stays unchecked until the XAML it
+> needs has actually been compiled on Windows, and the note says exactly what is
+> left to do there.
 
 - [ ] WinUI 3 shell: dashboard (engine status, quick record/clip buttons)
+      **Policy half done and tested; XAML pending a Windows host.**
+      `Frost.Shared/Shell/DashboardModel.cs` projects an `EngineStatus` — or its
+      absence — into every string the status panel shows and every button it
+      enables. It is a pure projection with no WinUI in it, which is what makes
+      it testable here, but that is not the only reason: the interesting bugs on
+      a dashboard are not layout, they are what it claims when the thing it
+      describes is missing or broken.
+      Three that the tests pin down. A null status is a first-class state rather
+      than a defaulted record, because `new EngineStatus()` renders as
+      "0 x 0 @ 0, 0 clips saved" — a working Engine reporting zeroes, not no
+      Engine; every unknown number is `null`. A faulted Engine offers nothing
+      that needs the encoder *even while it still reports itself armed*, which is
+      exactly what happens when the fault arrives after arming, and a live clip
+      button that silently does nothing reads as a broken app. And `IsArmed` and
+      `IsRecordingSession` are orthogonal, not two values of one enum, because
+      the spec requires both at once off a single encode.
+      Quick-clip buttons are generated from the user's own `SaveClip` hotkey
+      assignments, so the dashboard and the keyboard can never disagree about
+      what "clip" means. A preset longer than the buffer currently holds stays
+      pressable but reports what it would really save: a greyed-out button eleven
+      seconds into a session looks broken, where "60s (11s available)" is just
+      true.
+      Verified: 31 tests, including the zero-`MaxClipSeconds` divide, a buffer
+      overshooting its own maximum, whitespace fault messages (serialisation
+      turns absent strings into empty ones, and an empty fault would grey out the
+      whole dashboard), and `NaN` from a corrupt settings file.
+      Left for Windows: `App.xaml`, the window shell with Mica, and a
+      `DashboardPage` that binds to this model — plus the `app.manifest` the
+      csproj deliberately does not reference yet.
 - [ ] Clip gallery: thumbnails, rename, delete, reveal, quick trim
 - [ ] Settings UI covering everything in Phase 4's schema
 - [ ] Mica/animations verified to be inactive while a game window has focus
