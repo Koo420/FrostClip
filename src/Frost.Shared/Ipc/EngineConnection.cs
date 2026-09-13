@@ -31,8 +31,15 @@ public sealed class EngineConnection : IAsyncDisposable
 
     private IpcClient? _client;
     private Task? _loop;
+
+    // Written on the polling loop, read from the UI thread. Volatile throughout:
+    // without it the Shell can observe a stale connection state or status
+    // indefinitely, and the JIT is free to hoist the read out of a binding's
+    // polling loop.
     private EngineStatus? _status;
-    private bool _connected;
+    private int _connected;
+    private int _connectAttempts;
+
     private bool _disposed;
 
     /// <param name="pipeName">Defaults to <see cref="FrostIpc.PipeName"/>.</param>
@@ -67,9 +74,9 @@ public sealed class EngineConnection : IAsyncDisposable
     public static TimeSpan MaxRetryDelay => TimeSpan.FromSeconds(5);
 
     /// <summary>Latest status, or null while the Engine is unreachable.</summary>
-    public EngineStatus? Status => _status;
+    public EngineStatus? Status => Volatile.Read(ref _status);
 
-    public bool IsConnected => _connected;
+    public bool IsConnected => Volatile.Read(ref _connected) != 0;
 
     /// <summary>Raised whenever a fresh status arrives.</summary>
     public event Action<EngineStatus>? StatusUpdated;
@@ -81,7 +88,7 @@ public sealed class EngineConnection : IAsyncDisposable
     public event Action<IpcMessage>? NotificationReceived;
 
     /// <summary>Connection attempts made, for diagnostics and tests.</summary>
-    public int ConnectAttempts { get; private set; }
+    public int ConnectAttempts => Volatile.Read(ref _connectAttempts);
 
     public void Start()
     {
@@ -180,13 +187,13 @@ public sealed class EngineConnection : IAsyncDisposable
             try
             {
                 var status = await _client!.GetStatusAsync(cancellationToken).ConfigureAwait(false);
-                _status = status;
+                Volatile.Write(ref _status, status);
                 Raise(() => StatusUpdated?.Invoke(status));
             }
             catch (EngineUnavailableException)
             {
                 SetConnected(false);
-                _status = null;
+                Volatile.Write(ref _status, null);
                 continue;
             }
             catch (OperationCanceledException)
@@ -215,10 +222,10 @@ public sealed class EngineConnection : IAsyncDisposable
         client.Disconnected += _ =>
         {
             SetConnected(false);
-            _status = null;
+            Volatile.Write(ref _status, null);
         };
 
-        ConnectAttempts++;
+        Interlocked.Increment(ref _connectAttempts);
 
         if (!await client.TryConnectAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -236,12 +243,16 @@ public sealed class EngineConnection : IAsyncDisposable
 
     private void SetConnected(bool connected)
     {
-        if (_connected == connected)
+        var value = connected ? 1 : 0;
+
+        // Only raise on an actual transition, and do the compare and the write as
+        // one operation: Disconnected can fire from the reader thread while the
+        // polling loop is also updating state.
+        if (Interlocked.Exchange(ref _connected, value) == value)
         {
             return;
         }
 
-        _connected = connected;
         Raise(() => ConnectionChanged?.Invoke(connected));
     }
 

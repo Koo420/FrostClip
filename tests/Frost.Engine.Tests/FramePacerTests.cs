@@ -183,19 +183,10 @@ public sealed class FramePacerTests
         var pacer = new FramePacer(60, TimeSpan.FromMilliseconds(500));
         var interval = Tps / 240;
 
-        for (var i = 0; i < 1000; i++)
+        AllocationAssert.NoPerIterationAllocation(i =>
         {
             pacer.Consider(i * interval);
             pacer.TryPlanFiller(i * interval, out _);
-        }
-
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 1000; i < 100_000; i++)
-        {
-            pacer.Consider(i * interval);
-            pacer.TryPlanFiller(i * interval, out _);
-        }
-
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        });
     }
 }

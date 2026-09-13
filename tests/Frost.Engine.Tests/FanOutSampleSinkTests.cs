@@ -71,18 +71,7 @@ public sealed class FanOutSampleSinkTests
         var fanOut = new FanOutSampleSink(new NoOpSink(), new NoOpSink(), new NoOpSink());
         var data = new byte[4096];
 
-        for (var i = 0; i < 1000; i++)
-        {
-            fanOut.TryWrite(data, i, 1, false);
-        }
-
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 200_000; i++)
-        {
-            fanOut.TryWrite(data, i, 1, i % 120 == 0);
-        }
-
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        AllocationAssert.NoPerIterationAllocation(i => fanOut.TryWrite(data, i, 1, i % 120 == 0));
     }
 
     private sealed class NoOpSink : IEncodedSampleSink

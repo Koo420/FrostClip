@@ -309,21 +309,12 @@ public sealed class HotkeyRouterTests
         // user makes, including the ones they are aiming with.
         var router = new HotkeyRouter(HotkeyAssignment.Defaults);
 
-        for (var i = 0; i < 1000; i++)
-        {
-            router.OnKeyDown('W', HotkeyModifiers.None);
-            router.OnKeyUp('W');
-        }
-
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 200_000; i++)
+        AllocationAssert.NoPerIterationAllocation(_ =>
         {
             router.OnKeyDown('W', HotkeyModifiers.None);
             router.OnKeyUp('W');
             router.OnKeyDown(VirtualKeys.F10, HotkeyModifiers.Alt | HotkeyModifiers.Control);
-        }
-
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        });
     }
 
     [Fact]
@@ -365,7 +356,7 @@ public sealed class HotkeyRouterTests
             router.OnKeyUp(key);
         }
 
-        Assert.True(clips.WaitForIdle(TimeSpan.FromSeconds(30)));
+        Assert.True(clips.WaitForIdle(TimeSpan.FromSeconds(60)));
         Assert.Equal(3, writer.Written.Count);
 
         TimeSpan DurationFor(string label) =>

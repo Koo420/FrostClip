@@ -124,20 +124,10 @@ public sealed class TexturePoolTests
         var allocator = new FakeTextureAllocator();
         using var pool = new TexturePool(allocator, 64, 64, 3);
 
-        // Warm up so first-call JIT does not get counted as a steady-state cost.
-        for (var i = 0; i < 100; i++)
-        {
-            pool.TryRentPreferring(0, out var warm);
-            pool.Return(warm.SlotIndex);
-        }
-
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 10_000; i++)
+        AllocationAssert.NoPerIterationAllocation(_ =>
         {
             pool.TryRentPreferring(0, out var texture);
             pool.Return(texture.SlotIndex);
-        }
-
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        });
     }
 }

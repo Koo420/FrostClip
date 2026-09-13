@@ -234,20 +234,11 @@ public sealed class FrameRouterTests
             var router = new FrameRouter(pool, pacer, new NoOpCopier(), new ReturningSink(pool), 1920, 1080);
             var interval = Tps / 60;
 
-            for (var i = 0; i < 2000; i++)
+            AllocationAssert.NoPerIterationAllocation(i =>
             {
                 router.OfferCaptured(SourceTexture, i * interval);
                 router.OfferFillerIfDue(i * interval);
-            }
-
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var i = 2000; i < 200_000; i++)
-            {
-                router.OfferCaptured(SourceTexture, i * interval);
-                router.OfferFillerIfDue(i * interval);
-            }
-
-            Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+            });
         }
         finally
         {

@@ -391,7 +391,49 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       with Phase 7.
 
 ## Phase 5 — Full-session recording + autoclip heuristics
-- [ ] Independent full-session recording toggle, no double-encode with ring buffer
+- [x] Independent full-session recording toggle, no double-encode with ring buffer
+      `Recording/FullSessionRecorder.cs` is permanently part of the encoder's
+      fan-out and a no-op when not recording, rather than being added to and
+      removed from the sink chain — rewiring a live encoder's output would mean
+      mutating what the encode thread reads while it reads it, and a bool check
+      per sample cannot race. `Windows/Encode/Mp4SessionWriter.cs` adapts
+      `Mp4Muxer` behind an `ISessionWriter` seam so the recorder's behaviour is
+      testable without Media Foundation.
+      "No double encode" is **measured, not asserted**:
+      `SingleEncodeFanOutTests` runs a counting encoder into a fan-out holding
+      both the ring buffer and the recorder, starts a session ten seconds in, and
+      checks the encoder was called exactly once per frame over the whole run,
+      that both destinations received byte-identical data, and that the ring
+      buffer could still serve a keyframe-aligned clip throughout. A further test
+      confirms a session writer falling behind costs the ring buffer nothing —
+      losing frames from the VOD must not lose them from the clip buffer.
+      Recording starts on a keyframe, discarding samples until one arrives,
+      because a file beginning on a P-frame has an undecodable first GOP. The
+      honest cost — up to one keyframe interval (2s by default) between the
+      keypress and the first frame in the file — is reported by
+      `DiscardedBeforeFirstKeyFrame` rather than hidden.
+      A design question the tests forced: if finalising the MP4 fails, the file
+      has no index and will not open anywhere. `Stop()` now returns null in that
+      case rather than metadata, so a broken recording is not presented in the
+      gallery as a good one; the partial file is left on disk (a repair tool may
+      salvage it, and throwing away someone's session unasked is worse) with its
+      path named in the log. `Dispose` finalises a recording in progress, since
+      otherwise a shutdown mid-session leaves an unplayable file.
+      Verified: 26 recorder tests plus 3 single-encode tests.
+
+      While here, two robustness fixes the flakiness hunt turned up, both real:
+      * `EngineConnection`'s state was written on the polling loop and read from
+        the UI thread with no memory barrier, so the Shell could observe a stale
+        connection state or status indefinitely, and the JIT was free to hoist the
+        read out of a binding's loop. Now volatile throughout, with the
+        connected-state transition done as a single interlocked exchange because
+        `Disconnected` can fire from the reader thread concurrently.
+      * The zero-allocation assertions were exactly-zero, which is flaky: tiered
+        compilation can promote a long loop mid-measurement and charge that to the
+        measuring thread. `AllocationAssert` now bounds allocation at under one
+        byte per iteration — the smallest object .NET can allocate is 24 bytes, so
+        anything allocating even once per iteration exceeds it by an order of
+        magnitude. Same guarantee, no false failures.
 - [ ] Audio loudness-spike bookmark detection (opt-in, off by default)
 - [ ] Manual "bookmark" hotkey tags a timestamp without a full export
 

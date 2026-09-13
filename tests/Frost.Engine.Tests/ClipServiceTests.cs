@@ -99,7 +99,7 @@ public sealed class ClipServiceTests
         service.ClipCompleted += result => completed = result;
 
         Assert.True(service.Request(new ClipRequest(TimeSpan.FromSeconds(15), "15s", "Half-Life 2")));
-        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(10)));
+        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(60)));
 
         var written = Assert.Single(writer.Written);
         Assert.StartsWith(Path.Combine(directory, "Half-Life 2 "), written.Path);
@@ -133,7 +133,7 @@ public sealed class ClipServiceTests
         Assert.Empty(writer.Written);
 
         writer.Release();
-        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(10)));
+        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(60)));
     }
 
     [Fact]
@@ -155,7 +155,7 @@ public sealed class ClipServiceTests
         Assert.True(clock.ElapsedMilliseconds < 250, $"Request took {clock.ElapsedMilliseconds}ms");
 
         writer.Release();
-        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(20)));
+        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(60)));
         Assert.Equal(2, writer.Written.Count);
     }
 
@@ -175,7 +175,7 @@ public sealed class ClipServiceTests
             service.Request(new ClipRequest(TimeSpan.FromSeconds(5)));
         }
 
-        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(20)));
+        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(60)));
         Assert.False(writer.SawOverlap);
         Assert.Equal(5, writer.Completed);
     }
@@ -199,7 +199,7 @@ public sealed class ClipServiceTests
         Assert.Equal(1, service.RequestsDropped);
 
         writer.Release();
-        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(30)));
+        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(60)));
     }
 
     [Fact]
@@ -220,7 +220,7 @@ public sealed class ClipServiceTests
         service.ClipCompleted += result => completed = result;
 
         service.Request(new ClipRequest(TimeSpan.FromSeconds(15)));
-        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(10)));
+        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(60)));
 
         Assert.Empty(writer.Written);
         Assert.NotNull(completed);
@@ -242,11 +242,11 @@ public sealed class ClipServiceTests
         service.ClipCompleted += results.Add;
 
         service.Request(new ClipRequest(TimeSpan.FromSeconds(5)));
-        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(10)));
+        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(60)));
 
         writer.Throw = false;
         service.Request(new ClipRequest(TimeSpan.FromSeconds(5)));
-        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(10)));
+        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(60)));
 
         Assert.Equal(2, results.Count);
         Assert.False(results[0].Succeeded);
@@ -291,7 +291,7 @@ public sealed class ClipServiceTests
             ring, writer, TempDirectory(), NullEngineLog.Instance, _ => false);
 
         service.Request(new ClipRequest(TimeSpan.FromSeconds(5)));
-        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(10)));
+        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(60)));
 
         var written = Assert.Single(writer.Written);
         foreach (var actual in written.Bytes)

@@ -365,18 +365,9 @@ public sealed class EncodedSampleRingTests
         var ring = Ring(seconds: 15);
         var frame = new byte[25_000];
 
-        for (var i = 0; i < 5000; i++)
-        {
-            ring.TryWrite(frame, i * FrameTicks, FrameTicks, i % 120 == 0);
-        }
-
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 5000; i < 100_000; i++)
-        {
-            ring.TryWrite(frame, i * FrameTicks, FrameTicks, i % 120 == 0);
-        }
-
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        AllocationAssert.NoPerIterationAllocation(
+            i => ring.TryWrite(frame, i * FrameTicks, FrameTicks, i % 120 == 0),
+            iterations: 100_000);
     }
 
     [Fact]

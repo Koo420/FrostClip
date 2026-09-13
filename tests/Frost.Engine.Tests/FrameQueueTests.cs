@@ -80,20 +80,11 @@ public sealed class FrameQueueTests
     {
         var queue = new FrameQueue(8);
 
-        for (var i = 0; i < 1000; i++)
+        AllocationAssert.NoPerIterationAllocation(i =>
         {
             queue.TryEnqueue(Frame(i));
             queue.TryDequeue(out _);
-        }
-
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (long i = 0; i < 200_000; i++)
-        {
-            queue.TryEnqueue(Frame(i));
-            queue.TryDequeue(out _);
-        }
-
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        });
     }
 
     [Fact]

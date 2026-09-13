@@ -96,9 +96,15 @@ public sealed class PipelineSoakTests
         Assert.Null(consumerFailure);
 
         var producerAllocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        var producedFrameCount = frames - 2000;
 
-        // Producer side is the capture thread's workload; it must be exactly zero.
-        Assert.Equal(0, producerAllocated);
+        // Producer side is the capture thread's workload: it must not allocate
+        // per frame. Bounded at under a byte per frame rather than exactly zero,
+        // because tiered compilation can promote a long loop mid-measurement and
+        // charge that to this thread; see AllocationAssert for the reasoning.
+        Assert.True(
+            producerAllocated < producedFrameCount,
+            $"the producer allocated {producerAllocated} bytes over {producedFrameCount} frames");
 
         // Every slot handed out must have come back, or capture would have
         // starved long before ten minutes were up.
@@ -141,9 +147,11 @@ public sealed class PipelineSoakTests
         }
 
         var before = GC.GetAllocatedBytesForCurrentThread();
+        var polls = 0L;
 
         for (var t = Tps; t <= totalTicks; t += pollInterval)
         {
+            polls++;
             router.OfferFillerIfDue(t);
             while (sink.TryTake(out var frame))
             {
@@ -151,7 +159,8 @@ public sealed class PipelineSoakTests
             }
         }
 
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated < polls, $"allocated {allocated} bytes over {polls} polls");
         Assert.Equal(pool.Capacity, pool.Available);
 
         // 10 minutes at a 500ms ceiling is at most 1200 fillers — slightly fewer

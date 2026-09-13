@@ -15,6 +15,13 @@ public sealed class EngineConnectionTests
 
     private static readonly TimeSpan FastPoll = TimeSpan.FromMilliseconds(50);
 
+    /// <summary>
+    /// Waits for a condition. These timeouts assert <i>that</i> something
+    /// happens, never how fast, so they are generous: the build host is shared and
+    /// a loaded machine has been observed running the suite three times slower
+    /// than usual. Tests that genuinely assert speed (Start() coming up promptly,
+    /// Request() not blocking) keep tight bounds.
+    /// </summary>
     private static async Task<bool> WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -46,7 +53,7 @@ public sealed class EngineConnectionTests
         connection.StatusUpdated += _ => Interlocked.Increment(ref updates);
         connection.Start();
 
-        Assert.True(await WaitUntilAsync(() => Volatile.Read(ref updates) >= 3, TimeSpan.FromSeconds(10)));
+        Assert.True(await WaitUntilAsync(() => Volatile.Read(ref updates) >= 3, TimeSpan.FromSeconds(45)));
         Assert.True(connection.IsConnected);
         Assert.Equal(1920, connection.Status!.CaptureWidth);
     }
@@ -59,7 +66,7 @@ public sealed class EngineConnectionTests
         await using var connection = new EngineConnection(UniquePipeName(), FastPoll);
         connection.Start();
 
-        Assert.True(await WaitUntilAsync(() => connection.ConnectAttempts >= 2, TimeSpan.FromSeconds(10)));
+        Assert.True(await WaitUntilAsync(() => connection.ConnectAttempts >= 2, TimeSpan.FromSeconds(45)));
         Assert.False(connection.IsConnected);
         Assert.Null(connection.Status);
     }
@@ -81,13 +88,13 @@ public sealed class EngineConnectionTests
         };
 
         connection.Start();
-        Assert.True(await WaitUntilAsync(() => connection.ConnectAttempts >= 1, TimeSpan.FromSeconds(10)));
+        Assert.True(await WaitUntilAsync(() => connection.ConnectAttempts >= 1, TimeSpan.FromSeconds(45)));
         Assert.False(connection.IsConnected);
 
         await using var server = new IpcServer(new FakeEngineCommands(), NullEngineLog.Instance, pipeName);
         server.Start();
 
-        Assert.True(await WaitUntilAsync(() => connection.IsConnected, TimeSpan.FromSeconds(15)));
+        Assert.True(await WaitUntilAsync(() => connection.IsConnected, TimeSpan.FromSeconds(45)));
 
         lock (states)
         {
@@ -108,17 +115,20 @@ public sealed class EngineConnectionTests
         await using var connection = new EngineConnection(pipeName, FastPoll);
         connection.Start();
 
-        Assert.True(await WaitUntilAsync(() => connection.IsConnected, TimeSpan.FromSeconds(10)));
+        Assert.True(await WaitUntilAsync(() => connection.IsConnected, TimeSpan.FromSeconds(45)));
 
         await server.DisposeAsync();
-        Assert.True(await WaitUntilAsync(() => !connection.IsConnected, TimeSpan.FromSeconds(10)));
+        Assert.True(await WaitUntilAsync(() => !connection.IsConnected, TimeSpan.FromSeconds(45)));
         Assert.Null(connection.Status);
 
         await using var replacement = new IpcServer(commands, NullEngineLog.Instance, pipeName);
         replacement.Start();
 
-        Assert.True(await WaitUntilAsync(() => connection.IsConnected, TimeSpan.FromSeconds(20)));
-        Assert.NotNull(connection.Status);
+        // Wait for a status, not just for the connection: the connection comes up
+        // before the first poll completes, so asserting on Status immediately is a
+        // race in the test rather than a product defect.
+        Assert.True(await WaitUntilAsync(
+            () => connection.IsConnected && connection.Status is not null, TimeSpan.FromSeconds(45)));
     }
 
     [Fact]
@@ -141,13 +151,13 @@ public sealed class EngineConnectionTests
         };
 
         connection.Start();
-        Assert.True(await WaitUntilAsync(() => connection.IsConnected, TimeSpan.FromSeconds(10)));
+        Assert.True(await WaitUntilAsync(() => connection.IsConnected, TimeSpan.FromSeconds(45)));
 
         await server.NotifyAsync(IpcMessage.ClipSavedNotification(commands.ListClips()[0]));
 
         Assert.True(await WaitUntilAsync(
             () => { lock (notifications) { return notifications.Count > 0; } },
-            TimeSpan.FromSeconds(10)));
+            TimeSpan.FromSeconds(45)));
 
         lock (notifications)
         {
@@ -176,7 +186,7 @@ public sealed class EngineConnectionTests
         connection.StatusUpdated += _ => Interlocked.Increment(ref updates);
         connection.Start();
 
-        Assert.True(await WaitUntilAsync(() => Volatile.Read(ref updates) >= 2, TimeSpan.FromSeconds(10)));
+        Assert.True(await WaitUntilAsync(() => Volatile.Read(ref updates) >= 2, TimeSpan.FromSeconds(45)));
         Assert.True(Volatile.Read(ref posted) >= Volatile.Read(ref updates));
     }
 
@@ -198,7 +208,7 @@ public sealed class EngineConnectionTests
         };
 
         connection.Start();
-        Assert.True(await WaitUntilAsync(() => Volatile.Read(ref raised) >= 4, TimeSpan.FromSeconds(10)));
+        Assert.True(await WaitUntilAsync(() => Volatile.Read(ref raised) >= 4, TimeSpan.FromSeconds(45)));
         Assert.True(connection.IsConnected);
     }
 
@@ -212,7 +222,7 @@ public sealed class EngineConnectionTests
 
         await using var connection = new EngineConnection(pipeName, FastPoll);
         connection.Start();
-        Assert.True(await WaitUntilAsync(() => connection.IsConnected, TimeSpan.FromSeconds(10)));
+        Assert.True(await WaitUntilAsync(() => connection.IsConnected, TimeSpan.FromSeconds(45)));
 
         Assert.True(await connection.TryInvokeAsync(
             client => client.SaveClipAsync(TimeSpan.FromSeconds(30), "30s")));

@@ -278,20 +278,11 @@ public sealed class SampleArenaTests
         var data = Pattern(4000, 3);
         var scratch = new byte[8192];
 
-        for (var i = 0; i < 2000; i++)
+        AllocationAssert.NoPerIterationAllocation(i =>
         {
             arena.TryAppendEvicting(data, i, 1, i % 120 == 0, out var sample);
             arena.Read(sample, scratch);
-        }
-
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 200_000; i++)
-        {
-            arena.TryAppendEvicting(data, i, 1, i % 120 == 0, out var sample);
-            arena.Read(sample, scratch);
-        }
-
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        });
     }
 
     [Fact]
