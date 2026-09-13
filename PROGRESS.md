@@ -638,7 +638,36 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       or double up, and that the tooltip stays inside Windows' 128-character limit
       (a silently cut tooltip looks like a bug). The Win32 side compiles but was
       not executed — needs Windows.
-- [ ] Autostart with Windows (optional, user-toggled)
+- [x] Autostart with Windows (optional, user-toggled)
+      `Startup/AutostartPlan.cs` (portable) chooses the mechanism and enumerates
+      what has to be removed to undo it; `Windows/Startup/AutostartManager.cs`
+      does the registry and WinRT work.
+      **Task Scheduler is deliberately not an option**, and that is the decision
+      that matters here. It is the usual way apps get "run at logon", and the
+      usual source of the orphaned entries Phase 10 forbids: an MSIX package
+      cannot remove a scheduled task it created, so uninstalling leaves a task
+      pointing at a deleted executable that Windows then reports as a failure at
+      every logon. The cheapest way to guarantee nothing is left behind is to
+      never create anything the uninstaller cannot reach. So a packaged build uses
+      the MSIX `StartupTask` extension (removed with the package, and visible to
+      the user in Task Manager's Startup tab, which is where they will look) and
+      an unpackaged build uses the per-user Run key, which Frost owns and removes.
+      Neither needs elevation — a background recorder has no business asking for
+      admin.
+      Once the user disables the entry in Task Manager, Windows does not let the
+      app re-enable it and returns `DisabledByUser`. That is reported honestly
+      rather than leaving a settings toggle that silently springs back; the same
+      goes for a policy block. A moved or reinstalled build is detected
+      (`IsRunValueStale`) and rewritten, because a stale Run entry fails at every
+      logon with no visible error.
+      Run commands are quoted whether or not the path contains a space — an
+      unquoted path with a space is the classic Windows mis-launch, where
+      `C:\Program` gets tried first — and a path containing a quote is refused
+      outright rather than allowed to inject arguments.
+      Verified: 13 plan tests, including one asserting no mechanism ever produces a
+      scheduled task, and that the packaged mechanism leaves Frost nothing to
+      clean up. The registry/WinRT side compiles but was not executed — needs
+      Windows.
 - [ ] Toast feedback on clip save (static, pre-rendered, <1.5s)
 
 ## Phase 9 — Performance pass
