@@ -580,6 +580,30 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       hide that kind of drift.
 
 ## Phase 7 — Shell UI
+
+> **Blocked on this build host.** `Frost.Shell` is WinUI 3, and its XAML compiler
+> is Windows-only — the project cannot be compiled here at all, let alone run. Per
+> the spec's own rule ("don't mark a checkbox done because the code compiles" —
+> and here it would not even compile), none of these can be honestly checked off
+> from Linux. Two ways forward, and the choice is a real one:
+>
+> 1. **Split it.** Put the Shell's *policy* — gallery listing/sorting, rename and
+>    delete, trim-range validation, thumbnail cache eviction, the
+>    foreground-window check that gates Mica — into portable code that is tested
+>    here, and leave only XAML and WinUI plumbing for a Windows session. This is
+>    the same shape used for capture, encode and IPC, and would make the eventual
+>    Windows work small and mechanical. The checkboxes still could not be ticked
+>    until the XAML builds.
+> 2. **Write it blind.** Produce the full WinUI 3 app unverified. Fast to write,
+>    but it would be the first code in this repo that has never been compiled, and
+>    checking the boxes would be dishonest.
+>
+> Phases 8–10 have the same problem to varying degrees: Phase 8 (tray, autostart,
+> toast) is Windows-only but *compiles* here, so it can be done to the same
+> standard as Phases 1–6; Phase 9 needs real hardware to measure; Phase 10 needs
+> Windows MSIX tooling.
+
+
 - [ ] WinUI 3 shell: dashboard (engine status, quick record/clip buttons)
 - [ ] Clip gallery: thumbnails, rename, delete, reveal, quick trim
 - [ ] Settings UI covering everything in Phase 4's schema
