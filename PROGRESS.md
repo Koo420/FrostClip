@@ -683,6 +683,50 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       (`SHOpenFolderAndSelectItems`), the trim UI, and the Sink Writer re-mux
       that executes a `TrimRange`.
 - [ ] Settings UI covering everything in Phase 4's schema
+      **Policy half done and tested; XAML pending a Windows host.**
+      `Frost.Shared/Shell/SettingsEditor.cs` describes the page as data — 33 rows
+      across the eight schema sections, each with a label, a control kind and
+      whether the change only takes effect on re-arming. That shape exists for
+      one reason: "covering everything in Phase 4's schema" is exactly the kind
+      of requirement that rots silently, because a hand-written XAML page cannot
+      be checked against the schema at all. A descriptor list can, and
+      `SettingsUiTests` reflects over `FrostSettings` to assert both directions —
+      every schema property has a row, and every row a property, so a renamed
+      setting cannot leave a control bound to nothing (a silent no-op in XAML).
+      A third test asserts the reflection finds more than 25 settings, so a
+      reflection bug cannot make the other two pass vacuously.
+      The reflection lives in the test project, not in `Frost.Shared`: the Engine
+      is published AOT, and reflecting over the schema at runtime is both an
+      IL2075 trim warning and something the product never needs to do. Caught by
+      the build — the first version had it in the library.
+      No bounds are restated in the UI layer. `SettingsEditor.Validate` calls
+      `SettingsStore.Normalise`, so the page and a hand-edited file cannot
+      disagree about what is valid and both produce the same wording. A test
+      pins that a correction's `Field` key matches a row's `Path`, so the page
+      can highlight the row a correction is about.
+      `Frost.Shared/Shell/HotkeyRebind.cs` is the rebinding validation, and it
+      exists because of the `WH_KEYBOARD_LL` choice: `RegisterHotKey` refuses a
+      combination another app owns, a hook does not. A hook sees everything and
+      does *not* swallow the keystroke, so a bare `G` fires every time someone
+      types "gg" in chat — the character does something, a clip saves, and
+      nothing connects the two for the user. Bare keys are therefore refused,
+      except F13–F24 (what a gaming keyboard's macro key emits, and the ideal
+      clip button) and Print Screen. Ctrl+Alt+Del, Alt+Tab, Alt+F4 and bare
+      Escape are refused as taken before Frost can see them.
+      Conflict detection keys on action *and* duration, because several
+      `SaveClip` assignments coexist and are told apart only by their duration —
+      keying on action alone would let the 15s hotkey silently steal the 30s
+      one's key. Durations are compared with a tolerance since they round-trip
+      through JSON as doubles, and an exact compare would eventually stop
+      recognising a hotkey as itself. A conflict with a *disabled* assignment is
+      still refused, with the message saying so: it would conflict the moment it
+      was switched back on.
+      Verified: 32 tests, including that the shipped default hotkeys pass the
+      same check the rebind UI applies (a default the page would refuse to let
+      you re-enter is a contradiction), and that an unparseable binding in a
+      hand-edited file is ignored rather than crashing the settings page.
+      Left for Windows: the XAML pages themselves, the key-capture control that
+      turns a keypress into a `HotkeyBinding`, and the folder picker.
 - [ ] Mica/animations verified to be inactive while a game window has focus
 
 ## Phase 8 — System integration
