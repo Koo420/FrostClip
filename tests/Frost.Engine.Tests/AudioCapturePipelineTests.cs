@@ -62,7 +62,7 @@ internal sealed class AudioAwareSessionWriter : ISessionWriter
 
     public bool IsFaulted => false;
 
-    public bool HasAudio => true;
+    public int AudioTrackCount => 1;
 
     public bool TryWrite(ReadOnlySpan<byte> data, long timestampTicks, long durationTicks, bool isKeyFrame)
     {
@@ -71,7 +71,7 @@ internal sealed class AudioAwareSessionWriter : ISessionWriter
         return true;
     }
 
-    public bool TryWriteAudio(ReadOnlySpan<byte> data, long timestampTicks)
+    public bool TryWriteAudio(int track, ReadOnlySpan<byte> data, long timestampTicks)
     {
         if (RefuseAudio)
         {
@@ -341,12 +341,12 @@ public sealed class AudioCapturePipelineTests
 
         public bool IsFaulted => false;
 
-        public bool HasAudio => true;
+        public int AudioTrackCount => 1;
 
         public bool TryWrite(ReadOnlySpan<byte> data, long timestampTicks, long durationTicks, bool isKeyFrame) =>
             true;
 
-        public bool TryWriteAudio(ReadOnlySpan<byte> data, long timestampTicks) => true;
+        public bool TryWriteAudio(int track, ReadOnlySpan<byte> data, long timestampTicks) => true;
 
         public void Finish(TimeSpan timeout)
         {

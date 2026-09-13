@@ -548,7 +548,36 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       Verified: 47 audio tests (format, conversion, buffer, timeline, pipeline),
       including routing with zero allocation on the capture thread. The WASAPI
       interop itself compiles but was not executed — needs Windows.
-- [ ] Optional mic capture as a second track, user-toggleable
+- [x] Optional mic capture as a second track, user-toggleable
+      The microphone is a **separate track**, not mixed into the game audio, so
+      it can be muted, re-levelled or dropped in an editor afterwards without
+      touching what the game sounded like. `Mp4Muxer` was generalised from one
+      audio stream to a small set (system on track 0, microphone on track 1),
+      with the writer thread interleaving whichever queued sample is oldest —
+      feeding the MP4 sink a whole session's video before any audio would make it
+      hold the lot in memory.
+      `Audio/MicrophoneState.cs` carries the live mute flag and gain. It is a
+      shared object rather than a settings value because muting has to take effect
+      on the *next audio block*, not on the next capture restart: the hotkey
+      thread flips it, the capture thread reads it per block, and neither waits
+      for the other. `Toggle()` is a compare-and-exchange loop, so two concurrent
+      toggles cannot both observe "unmuted" and both write "muted" — there is a
+      test that hammers it from two threads and checks every flip is accounted
+      for. Gain is clamped on assignment, so a bad settings value cannot produce a
+      deafening track.
+      Muting **silences** rather than dropping the block, for the same reason the
+      gap filler exists: a shorter track shifts everything after it and desyncs
+      the recording.
+      Alt+F2 is now a default binding, and the hotkey path works end to end
+      (router → dispatcher → `MicrophoneState`), tested. Pressing it with
+      microphone capture off says so rather than doing nothing silently.
+      `--clip-test --mic` adds the second track to the end-to-end verb.
+      Verified: 14 microphone tests on top of the audio suite. One hazard worth
+      recording: changing `ISessionWriter.TryWriteAudio` to take a track index
+      left two test fakes on the old signature, and because the interface has a
+      default implementation they silently stopped receiving audio rather than
+      failing to compile. The tests caught it, but default interface methods will
+      hide that kind of drift.
 
 ## Phase 7 — Shell UI
 - [ ] WinUI 3 shell: dashboard (engine status, quick record/clip buttons)

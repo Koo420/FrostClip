@@ -39,18 +39,30 @@ public sealed class AudioCapturePipeline : IAudioSink, IDisposable
     /// <param name="bookmarker">
     /// Autoclip detector, or null. When its feature is off it costs a field check.
     /// </param>
+    /// <param name="trackIndex">
+    /// Which audio track this source writes to. System audio is 0 and the
+    /// microphone 1: separate tracks rather than a mix, so the mic can be muted,
+    /// re-levelled or dropped in an editor afterwards.
+    /// </param>
     public AudioCapturePipeline(
         IAudioSource source,
         TimeSpan clipWindow,
         IEngineLog log,
-        AutoclipBookmarker? bookmarker = null)
+        AutoclipBookmarker? bookmarker = null,
+        int trackIndex = 0)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(log);
 
+        if (trackIndex is < 0 or > 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(trackIndex), trackIndex, "Track must be 0 or 1.");
+        }
+
         _source = source;
         _log = log;
         _bookmarker = bookmarker;
+        TrackIndex = trackIndex;
         _buffer = new AudioTrackBuffer(source.Format.AsInt16, clipWindow);
 
         // The detector wants floats; capture hands over int16. Sized for a
@@ -60,6 +72,9 @@ public sealed class AudioCapturePipeline : IAudioSink, IDisposable
 
     /// <summary>The rolling buffer a clip's audio is cut from.</summary>
     public AudioTrackBuffer Buffer => _buffer;
+
+    /// <summary>Which audio track this source feeds.</summary>
+    public int TrackIndex { get; }
 
     public AudioFormat Format => _buffer.Format;
 
@@ -101,7 +116,7 @@ public sealed class AudioCapturePipeline : IAudioSink, IDisposable
         // A session recording that cannot take a block loses that block; it must
         // never stall the capture thread, because that stalls the audio endpoint
         // for every application on the machine.
-        Volatile.Read(ref _sessionWriter)?.TryWriteAudio(data, timestampTicks);
+        Volatile.Read(ref _sessionWriter)?.TryWriteAudio(TrackIndex, data, timestampTicks);
 
         FeedDetector(data, timestampTicks);
 

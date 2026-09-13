@@ -29,15 +29,18 @@ public interface ISessionWriter : IDisposable
     void Finish(TimeSpan timeout);
 
     /// <summary>
-    /// Queues a block of PCM audio, if this writer has an audio track.
+    /// Queues a block of PCM audio on one track.
     /// </summary>
     /// <remarks>
-    /// A default implementation so a writer without audio — and every test fake —
-    /// does not have to say so. Called on the audio capture thread, so the same
-    /// no-blocking, no-allocating rules apply.
+    /// Track-indexed because system audio and the microphone are separate tracks,
+    /// not a mix — so the mic can be muted, re-levelled or dropped in an editor
+    /// afterwards without touching the game audio. A default implementation so a
+    /// writer without audio, and every test fake, does not have to say so. Called
+    /// on the audio capture thread, so the same no-blocking, no-allocating rules
+    /// apply.
     /// </remarks>
-    bool TryWriteAudio(ReadOnlySpan<byte> data, long timestampTicks) => false;
+    bool TryWriteAudio(int track, ReadOnlySpan<byte> data, long timestampTicks) => false;
 
-    /// <summary>Whether this writer has an audio track at all.</summary>
-    bool HasAudio => false;
+    /// <summary>Audio tracks this writer carries.</summary>
+    int AudioTrackCount => 0;
 }

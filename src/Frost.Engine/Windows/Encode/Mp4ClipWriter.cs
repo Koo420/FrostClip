@@ -22,7 +22,7 @@ internal sealed class Mp4ClipWriter : IClipWriter
     private readonly EncoderSettings _settings;
     private readonly IEngineLog _log;
     private readonly ClipKind _kind;
-    private readonly AudioTrackBuffer? _audio;
+    private readonly IReadOnlyList<AudioTrackBuffer> _audioTracks;
     private byte[] _audioScratch = [];
 
     /// <param name="mediaTypeFactory">
@@ -30,17 +30,18 @@ internal sealed class Mp4ClipWriter : IClipWriter
     /// private data (H.264's SPS/PPS). Called per clip because the encoder can be
     /// restarted between clips.
     /// </param>
-    /// <param name="audio">
-    /// Audio to trim to the clip's window, or null for a silent clip. The same
-    /// buffer the audio capture writes into: a clip takes the slice matching its
-    /// video rather than keeping a separate copy.
+    /// <param name="audioTracks">
+    /// Audio buffers to trim to the clip's window — system audio, and the
+    /// microphone as its own track when enabled. Empty for a silent clip. These
+    /// are the same buffers the audio capture writes into: a clip takes the slice
+    /// matching its video rather than keeping a separate copy.
     /// </param>
     internal Mp4ClipWriter(
         Func<IMFMediaType> mediaTypeFactory,
         EncoderSettings settings,
         IEngineLog log,
         ClipKind kind = ClipKind.InstantClip,
-        AudioTrackBuffer? audio = null)
+        IReadOnlyList<AudioTrackBuffer>? audioTracks = null)
     {
         ArgumentNullException.ThrowIfNull(mediaTypeFactory);
         ArgumentNullException.ThrowIfNull(settings);
@@ -50,7 +51,7 @@ internal sealed class Mp4ClipWriter : IClipWriter
         _settings = settings;
         _log = log;
         _kind = kind;
-        _audio = audio;
+        _audioTracks = audioTracks ?? [];
     }
 
     public string Extension => ".mp4";
@@ -66,7 +67,7 @@ internal sealed class Mp4ClipWriter : IClipWriter
     /// </remarks>
     private void WriteAudioFor(RingSnapshot snapshot, Mp4Muxer muxer)
     {
-        if (_audio is null || snapshot.IsEmpty)
+        if (_audioTracks.Count == 0 || snapshot.IsEmpty)
         {
             return;
         }
@@ -74,23 +75,34 @@ internal sealed class Mp4ClipWriter : IClipWriter
         var startTicks = snapshot[0].TimestampTicks;
         var endTicks = snapshot[snapshot.Count - 1].EndTimestampTicks;
 
-        if (_audioScratch.Length < _audio.MaxSnapshotBytes)
+        var needed = _audioTracks.Max(track => track.MaxSnapshotBytes);
+
+        if (_audioScratch.Length < needed)
         {
             // Grown once per writer, never per clip.
-            _audioScratch = new byte[_audio.MaxSnapshotBytes];
+            _audioScratch = new byte[needed];
         }
 
-        var audio = _audio.Snapshot(startTicks, endTicks, _audioScratch);
+        for (var track = 0; track < _audioTracks.Count; track++)
+        {
+            WriteTrack(track, _audioTracks[track], startTicks, endTicks, muxer);
+        }
+    }
+
+    private void WriteTrack(
+        int track, AudioTrackBuffer buffer, long startTicks, long endTicks, Mp4Muxer muxer)
+    {
+        var audio = buffer.Snapshot(startTicks, endTicks, _audioScratch);
 
         if (audio.IsEmpty)
         {
-            _log.Debug("No audio covered the clip's window; writing a silent clip.");
+            _log.Debug($"No audio on track {track} covered the clip's window.");
             return;
         }
 
-        // One block per WASAPI packet, so the muxer's queue sees the same shape it
-        // would during a live session recording.
-        var format = _audio.Format;
+        // One block per 20ms, so the muxer's queue sees roughly the shape it would
+        // during a live session recording.
+        var format = buffer.Format;
         var blockBytes = format.BytesPerFrame * (format.SampleRate / 50);
         var offset = 0;
 
@@ -100,12 +112,15 @@ internal sealed class Mp4ClipWriter : IClipWriter
             var frames = offset / format.BytesPerFrame;
 
             if (!muxer.TryWriteAudio(
+                    track,
                     new ReadOnlySpan<byte>(_audioScratch, offset, length),
                     audio.StartTicks + format.FramesToTicks(frames)))
             {
                 // The audio queue is full, which means the disk is far behind.
                 // Losing the tail of the audio is better than failing the clip.
-                _log.Warn($"Audio queue full while writing {muxer.Path}; the clip's audio is short.");
+                _log.Warn(
+                    $"Audio queue full on track {track} while writing {muxer.Path}; " +
+                    "that track's audio is short.");
                 break;
             }
 
@@ -127,7 +142,9 @@ internal sealed class Mp4ClipWriter : IClipWriter
             _log,
             queueBytes: Math.Clamp(snapshot.TotalBytes / 4, 4L * 1024 * 1024, 64L * 1024 * 1024),
             queueSamples: Math.Clamp(snapshot.Count, 64, 4096),
-            audioFormat: _audio?.Format);
+            audioFormats: _audioTracks.Count > 0
+                ? _audioTracks.Select(track => track.Format).ToList()
+                : null);
 
         // Audio first: the sink interleaves by timestamp anyway, and queueing the
         // audio up front means it is already present when the video catches up,

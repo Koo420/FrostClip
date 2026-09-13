@@ -13,6 +13,7 @@ namespace Frost.Shared.Hotkeys;
 public static class VirtualKeys
 {
     public const int F1 = 0x70;
+    public const int F2 = 0x71;
     public const int F9 = 0x78;
     public const int F10 = 0x79;
     public const int F11 = 0x7A;

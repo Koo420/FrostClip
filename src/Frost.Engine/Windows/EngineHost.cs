@@ -325,27 +325,34 @@ internal static partial class EngineHost
             ring,
             log);
 
+        var audioWindow = TimeSpan.FromSeconds(clipSeconds * 1.5);
+
         // Audio is best-effort: a machine with no playback device, or one whose
         // endpoint reports a format we cannot read, still records video.
-        AudioCapturePipeline? audio = null;
-        try
+        var system = TryStartAudio(
+            Frost.Engine.Windows.Audio.WasapiCaptureMode.Loopback,
+            audioWindow, trackIndex: 0, microphone: null, log);
+
+        // The microphone is a second track, not a mix, so it can be muted or
+        // dropped later without touching the game audio.
+        var wantsMic = args.Any(a => string.Equals(a, "--mic", StringComparison.Ordinal));
+        var microphoneState = wantsMic ? new MicrophoneState() : null;
+
+        var microphone = wantsMic
+            ? TryStartAudio(
+                Frost.Engine.Windows.Audio.WasapiCaptureMode.Microphone,
+                audioWindow, trackIndex: 1, microphoneState, log)
+            : null;
+
+        var audioTracks = new List<AudioTrackBuffer>();
+        if (system is not null)
         {
-            var loopback = new Frost.Engine.Windows.Audio.WasapiCapture(
-                Frost.Engine.Windows.Audio.WasapiCaptureMode.Loopback, deviceId: null, log);
-
-            audio = new AudioCapturePipeline(
-                loopback,
-                TimeSpan.FromSeconds(clipSeconds * 1.5),
-                log);
-
-            audio.Start();
-            log.Info($"Loopback audio: {audio.DeviceName}, {audio.Format}.");
+            audioTracks.Add(system.Buffer);
         }
-        catch (Exception ex)
+
+        if (microphone is not null)
         {
-            log.Warn("Loopback audio capture could not start; the clip will be silent.", ex);
-            audio?.Dispose();
-            audio = null;
+            audioTracks.Add(microphone.Buffer);
         }
 
         try
@@ -355,7 +362,7 @@ internal static partial class EngineHost
                 encoderSettings ?? throw new InvalidOperationException("encoder settings were not produced"),
                 log,
                 ClipKind.InstantClip,
-                audio?.Buffer);
+                audioTracks);
 
             using var clips = new ClipService(ring, writer, directory, log);
 
@@ -382,8 +389,9 @@ internal static partial class EngineHost
             log.Info(
                 $"buffered={ring.HeldDuration.TotalSeconds:F1}s " +
                 $"video={ring.SamplesWritten} " +
-                $"audio-blocks={audio?.BlocksRouted ?? 0} " +
-                $"audio-silence-frames={audio?.SilenceFramesInserted ?? 0}");
+                $"system-audio-blocks={system?.BlocksRouted ?? 0} " +
+                $"system-silence-frames={system?.SilenceFramesInserted ?? 0} " +
+                $"mic-blocks={microphone?.BlocksRouted ?? 0}");
 
             if (result is null || !result.Succeeded)
             {
@@ -397,24 +405,67 @@ internal static partial class EngineHost
                 $"{result.Metadata.Duration.TotalSeconds:F1}s, written in " +
                 $"{result.WriteDuration.TotalMilliseconds:F0}ms).");
 
-            if (audio is null)
+            if (system is null)
             {
                 log.Warn("No audio was captured, so the clip has no audio track to check.");
                 return 0;
             }
 
-            if (audio.BlocksRouted == 0)
+            if (system.BlocksRouted == 0)
             {
                 log.Error("Audio capture ran but delivered nothing; the clip is silent.");
                 return 6;
             }
 
-            log.Info("Clip written with an audio track.");
+            log.Info(
+                $"Clip written with {audioTracks.Count} audio track(s)" +
+                $"{(microphone is not null ? " (system + microphone)" : " (system)")}.");
             return 0;
         }
         finally
         {
-            audio?.Dispose();
+            microphone?.Dispose();
+            system?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Starts one audio capture, returning null when it cannot start.
+    /// </summary>
+    /// <remarks>
+    /// Audio is never allowed to fail a recording: no playback device, a format we
+    /// cannot read, or a microphone the user has denied access to all mean a
+    /// missing track, not a missing clip.
+    /// </remarks>
+    private static AudioCapturePipeline? TryStartAudio(
+        Frost.Engine.Windows.Audio.WasapiCaptureMode mode,
+        TimeSpan window,
+        int trackIndex,
+        MicrophoneState? microphone,
+        IEngineLog log)
+    {
+        AudioCapturePipeline? pipeline = null;
+
+        try
+        {
+            var capture = new Frost.Engine.Windows.Audio.WasapiCapture(
+                mode,
+                deviceId: null,
+                log,
+                gain: microphone?.Gain ?? 1.0,
+                isMuted: microphone is null ? null : () => microphone.IsMuted);
+
+            pipeline = new AudioCapturePipeline(capture, window, log, bookmarker: null, trackIndex);
+            pipeline.Start();
+
+            log.Info($"{mode} audio on track {trackIndex}: {pipeline.DeviceName}, {pipeline.Format}.");
+            return pipeline;
+        }
+        catch (Exception ex)
+        {
+            log.Warn($"{mode} audio capture could not start; that track will be missing.", ex);
+            pipeline?.Dispose();
+            return null;
         }
     }
 
@@ -508,8 +559,9 @@ internal static partial class EngineHost
               --ipc-server        run the Engine/Shell IPC server until Ctrl+C
               --encode-test [s] [out.mp4]
                                   record the primary display and write an MP4
-              --clip-test [s] [dir]
+              --clip-test [s] [dir] [--mic]
                                   fill the ring buffer, then save a clip with audio
+                                  (--mic adds the microphone as a second track)
               --displays          list capture-able displays
               --windows           list capture-able windows
               --help              this text

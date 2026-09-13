@@ -1,3 +1,4 @@
+using Frost.Engine.Audio;
 using Frost.Engine.Clips;
 using Frost.Engine.Diagnostics;
 using Frost.Engine.Recording;
@@ -21,6 +22,7 @@ public sealed class EngineHotkeyActions : IHotkeyActions
     private readonly Func<string> _sessionPathFactory;
     private readonly Func<string?> _gameNameProvider;
     private readonly Func<(int Width, int Height, string Codec)> _formatProvider;
+    private readonly MicrophoneState? _microphone;
     private readonly IEngineLog _log;
 
     private long _bookmarks;
@@ -29,13 +31,18 @@ public sealed class EngineHotkeyActions : IHotkeyActions
     /// <param name="sessionPathFactory">Produces the path for a new session recording.</param>
     /// <param name="gameNameProvider">Foreground process name, for file naming.</param>
     /// <param name="formatProvider">Current capture geometry and codec, for metadata.</param>
+    /// <param name="microphone">
+    /// Live microphone state, or null when microphone capture is off. Muting takes
+    /// effect on the next audio block rather than on a capture restart.
+    /// </param>
     public EngineHotkeyActions(
         ClipService clips,
         FullSessionRecorder session,
         Func<string> sessionPathFactory,
         Func<string?> gameNameProvider,
         Func<(int Width, int Height, string Codec)> formatProvider,
-        IEngineLog log)
+        IEngineLog log,
+        MicrophoneState? microphone = null)
     {
         ArgumentNullException.ThrowIfNull(clips);
         ArgumentNullException.ThrowIfNull(session);
@@ -50,6 +57,7 @@ public sealed class EngineHotkeyActions : IHotkeyActions
         _gameNameProvider = gameNameProvider;
         _formatProvider = formatProvider;
         _log = log;
+        _microphone = microphone;
     }
 
     /// <summary>Manual bookmarks placed.</summary>
@@ -103,7 +111,17 @@ public sealed class EngineHotkeyActions : IHotkeyActions
         _log.Info($"Bookmark ignored: {error}");
     }
 
-    public void ToggleMicrophoneMute() =>
-        // Arrives with the audio phase; saying so beats silently doing nothing.
-        _log.Info("Microphone muting is not available yet.");
+    public void ToggleMicrophoneMute()
+    {
+        if (_microphone is null)
+        {
+            // Telling the user beats silently doing nothing when they press a key
+            // and expect a change.
+            _log.Info("Microphone capture is off, so there is nothing to mute.");
+            return;
+        }
+
+        var muted = _microphone.Toggle();
+        _log.Info(muted ? "Microphone muted." : "Microphone unmuted.");
+    }
 }

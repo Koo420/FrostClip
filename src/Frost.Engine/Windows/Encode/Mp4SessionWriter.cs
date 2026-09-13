@@ -21,7 +21,10 @@ internal sealed class Mp4SessionWriter : ISessionWriter
     private readonly Mp4Muxer _muxer;
 
     internal Mp4SessionWriter(
-        string path, IMFMediaType encodedType, IEngineLog log, AudioFormat? audioFormat = null)
+        string path,
+        IMFMediaType encodedType,
+        IEngineLog log,
+        IReadOnlyList<AudioFormat>? audioFormats = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(encodedType);
@@ -33,7 +36,7 @@ internal sealed class Mp4SessionWriter : ISessionWriter
             log,
             queueBytes: 64L * 1024 * 1024,
             queueSamples: 4096,
-            audioFormat: audioFormat);
+            audioFormats: audioFormats);
     }
 
     public string Extension => ".mp4";
@@ -42,13 +45,13 @@ internal sealed class Mp4SessionWriter : ISessionWriter
 
     public bool IsFaulted => _muxer.IsFaulted;
 
-    public bool HasAudio => _muxer.HasAudio;
+    public int AudioTrackCount => _muxer.AudioTrackCount;
 
     public bool TryWrite(ReadOnlySpan<byte> data, long timestampTicks, long durationTicks, bool isKeyFrame) =>
         _muxer.TryWrite(data, timestampTicks, durationTicks, isKeyFrame);
 
-    public bool TryWriteAudio(ReadOnlySpan<byte> data, long timestampTicks) =>
-        _muxer.TryWriteAudio(data, timestampTicks);
+    public bool TryWriteAudio(int track, ReadOnlySpan<byte> data, long timestampTicks) =>
+        _muxer.TryWriteAudio(track, data, timestampTicks);
 
     public void Finish(TimeSpan timeout) => _muxer.Finish(timeout);
 

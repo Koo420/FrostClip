@@ -128,5 +128,10 @@ public sealed record HotkeyAssignment
             Action = HotkeyAction.Bookmark,
             Binding = new HotkeyBinding(VirtualKeys.F1, HotkeyModifiers.Alt),
         },
+        new()
+        {
+            Action = HotkeyAction.ToggleMicrophoneMute,
+            Binding = new HotkeyBinding(VirtualKeys.F2, HotkeyModifiers.Alt),
+        },
     ];
 }
