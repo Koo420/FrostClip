@@ -71,6 +71,11 @@ function Invoke-Step {
     $verdict = if ($code -eq 0) { 'PASS' } else { 'FAIL' }
     $meaning = if ($ExitMeanings.ContainsKey($code)) { $ExitMeanings[$code] } else { $null }
 
+    # The Shell step is informational: it is expected to fail until Phase 7's
+    # XAML exists, so it is reported but never counted as a failure.
+    $isExpectedFailure = $Name -like '*expected to fail*'
+    if ($isExpectedFailure -and $code -ne 0) { $verdict = 'EXPECTED' }
+
     $results.Add([pscustomobject]@{ Name = $Name; Code = $code; Verdict = $verdict })
 
     Add-Line ""
@@ -95,7 +100,8 @@ function Invoke-Step {
     }
     Add-Line '```'
 
-    Write-Host "    $verdict (exit $code)" -ForegroundColor $(if ($code -eq 0) { 'Green' } else { 'Red' })
+    Write-Host "    $verdict (exit $code)" -ForegroundColor $(
+        switch ($verdict) { 'PASS' { 'Green' } 'EXPECTED' { 'Yellow' } default { 'Red' } })
 }
 
 # --- environment ------------------------------------------------------------
@@ -123,9 +129,20 @@ Add-Line "| Capture length | ${Seconds}s |"
 
 # --- build ------------------------------------------------------------------
 
-Invoke-Step -Name 'Build and unit tests' `
-    -Why 'The whole solution including the WinUI 3 Shell, which cannot be compiled on the Linux build host at all. This is the first time the Shell project has ever been through a compiler.' `
-    -Body { & (Join-Path $repoRoot 'build.ps1') -Configuration Release }
+Invoke-Step -Name 'Build Engine, Shared and tests' `
+    -Why 'The part of the solution that must pass. The Engine''s Windows target framework compiles on the Linux build host too, so this is a re-check rather than a first look — but it is the first time it has been built by a Windows SDK.' `
+    -Body { dotnet build (Join-Path $repoRoot 'Frost.Linux.slnf') -c Release --nologo }
+
+Invoke-Step -Name 'Unit tests' `
+    -Why '750 tests, all of which already pass on the build host. A failure here means something is genuinely platform-dependent.' `
+    -Body { dotnet test (Join-Path $repoRoot 'tests/Frost.Engine.Tests/Frost.Engine.Tests.csproj') -c Release --nologo --no-build }
+
+# Attempted separately and expected to fail today: Frost.Shell has a csproj and
+# no source files, because Phase 7's XAML is the work that needs this machine.
+# Rolling it into the step above would report a FAIL that means nothing.
+Invoke-Step -Name 'Build the WinUI 3 Shell (expected to fail until Phase 7)' `
+    -Why 'Frost.Shell has no App.xaml or pages yet, so this should fail with CS5001 (no entry point). What matters is *how* it fails: a missing Windows App SDK workload or a broken csproj is a different message, and worth knowing before the XAML is written.' `
+    -Body { dotnet build (Join-Path $repoRoot 'src/Frost.Shell/Frost.Shell.csproj') -c Release --nologo }
 
 $engine = Join-Path $repoRoot 'src/Frost.Engine/bin/Release/net8.0-windows10.0.26100.0/Frost.Engine.exe'
 
