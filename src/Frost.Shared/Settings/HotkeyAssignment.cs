@@ -50,7 +50,15 @@ public sealed record HotkeyAssignment
 
     public bool Enabled { get; init; } = true;
 
-    /// <summary>Label to show, derived from the duration when none was set.</summary>
+    /// <summary>
+    /// Label to show, derived from the duration when none was set.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately computed, not cached on the record: a cached field would be
+    /// copied by <c>with</c> and a rewritten label would silently keep the old
+    /// value. Callers on a hot path (the keyboard hook) precompute it instead —
+    /// see <c>HotkeyRouter</c>.
+    /// </remarks>
     public string EffectiveLabel =>
         Label ?? (ClipDuration is { } duration ? FormatDuration(duration) : Action.ToString());
 

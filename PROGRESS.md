@@ -467,7 +467,40 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       round numbers), digital silence without infinities, 1/2/6 channel layouts,
       an end-to-end mark landing in a real session recording's sidecar, and
       zero-allocation on both the enabled and disabled paths.
-- [ ] Manual "bookmark" hotkey tags a timestamp without a full export
+- [x] Manual "bookmark" hotkey tags a timestamp without a full export
+      `Hotkeys/HotkeyActionDispatcher.cs` plus `Hotkeys/EngineHotkeyActions.cs`
+      are the wiring from a keypress to a thing that happens — and the same path
+      the IPC commands take, so a clip saved from the Shell and one saved from a
+      hotkey cannot drift apart.
+      The dispatcher exists because of *where* `HotkeyRouter.Fired` is raised:
+      inside the keyboard hook, on the critical path of every keystroke on the
+      machine. Starting a session recording opens a file; saving a clip touches a
+      directory. Either there would delay the user's keystroke reaching the game,
+      and a hook callback that overruns is silently removed by Windows. So the
+      hook side copies a struct into a pre-allocated ring and signals, and
+      `frost-hotkey-actions` does the rest. Tested: the action provably runs on a
+      different thread, the hook path returns in under 100ms even when the action
+      takes 400ms, and the hook-side queueing allocates nothing.
+      The bookmark itself appends an offset to an in-memory list and nothing else
+      — no file written, no clip exported, no ring-buffer read. The headline test
+      asserts exactly that: after a bookmark press, zero clips requested, zero
+      written, and the mark lands at the right offset in the finished recording's
+      sidecar. Pressing it out of habit with no recording running is harmless.
+      Two real bugs the tests caught:
+      * The dispatcher passed `assignment.Label` rather than the effective label,
+        so the default presets (which set no explicit label) lost the "(30s)"
+        suffix that tells two clips from the same second apart. The router now
+        precomputes labels and carries them on the event — the hook path must not
+        format a string.
+      * The first fix cached the label on the `HotkeyAssignment` record, which
+        `with` copies: rewriting a label silently kept the old value. Caching on a
+        record is a trap; precomputing in the router avoids it entirely.
+      Verified: 7 dispatcher tests and 6 bookmark tests. Three test races were
+      also fixed along the way (asserting on a flag that is set before its event
+      is raised; expecting an exact accept count from a bounded queue whose worker
+      may already have dequeued; and ~100MB of pointless byte copying in
+      scheduling tests). Suite is stable across seven consecutive runs, two of
+      them on a heavily loaded host.
 
 ## Phase 6 — Audio
 - [ ] WASAPI loopback capture muxed into clips

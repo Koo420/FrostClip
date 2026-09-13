@@ -4,7 +4,15 @@ using Frost.Shared.Settings;
 namespace Frost.Engine.Hotkeys;
 
 /// <summary>A hotkey that fired.</summary>
-public readonly record struct HotkeyFired(HotkeyAssignment Assignment, long TimestampTicks);
+/// <param name="Assignment">What was bound.</param>
+/// <param name="Label">
+/// The assignment's display label, precomputed by the router. Carried on the
+/// event rather than derived by the handler because handlers run on the keyboard
+/// hook, where formatting a string per keypress is not acceptable.
+/// </param>
+/// <param name="TimestampTicks">When it fired, on the monotonic clock.</param>
+public readonly record struct HotkeyFired(
+    HotkeyAssignment Assignment, string Label, long TimestampTicks);
 
 /// <summary>
 /// Matches key events against the configured hotkeys.
@@ -30,6 +38,7 @@ public sealed class HotkeyRouter
     private readonly HotkeyAssignment[] _assignments;
     private readonly int[] _virtualKeys;
     private readonly HotkeyModifiers[] _modifiers;
+    private readonly string[] _labels;
     private readonly bool[] _down;
 
     public HotkeyRouter(IEnumerable<HotkeyAssignment> assignments)
@@ -47,12 +56,16 @@ public sealed class HotkeyRouter
         // memory and never dereferences a record to compare a key code.
         _virtualKeys = new int[_assignments.Length];
         _modifiers = new HotkeyModifiers[_assignments.Length];
+        _labels = new string[_assignments.Length];
         _down = new bool[_assignments.Length];
 
         for (var i = 0; i < _assignments.Length; i++)
         {
             _virtualKeys[i] = _assignments[i].Binding.VirtualKey;
             _modifiers[i] = _assignments[i].Binding.Modifiers;
+
+            // Precomputed here so the hook path never formats a string.
+            _labels[i] = _assignments[i].EffectiveLabel;
         }
     }
 
@@ -111,7 +124,7 @@ public sealed class HotkeyRouter
 
             _down[i] = true;
             fired++;
-            Fired?.Invoke(new HotkeyFired(_assignments[i], timestampTicks));
+            Fired?.Invoke(new HotkeyFired(_assignments[i], _labels[i], timestampTicks));
         }
 
         return fired;

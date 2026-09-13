@@ -348,7 +348,7 @@ public sealed class HotkeyRouterTests
             [Clip(VirtualKeys.F9, 15), Clip(VirtualKeys.F10, 30), Clip(VirtualKeys.F11, 60)]);
 
         router.Fired += e => clips.Request(new ClipRequest(
-            e.Assignment.ClipDuration!.Value, e.Assignment.EffectiveLabel, "Test Game"));
+            e.Assignment.ClipDuration!.Value, e.Label, "Test Game"));
 
         foreach (var key in new[] { VirtualKeys.F9, VirtualKeys.F10, VirtualKeys.F11 })
         {

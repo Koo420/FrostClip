@@ -94,12 +94,14 @@ public sealed class EngineConnectionTests
         await using var server = new IpcServer(new FakeEngineCommands(), NullEngineLog.Instance, pipeName);
         server.Start();
 
-        Assert.True(await WaitUntilAsync(() => connection.IsConnected, TimeSpan.FromSeconds(45)));
+        // Wait for the event, not for the flag. IsConnected is set before the
+        // ConnectionChanged handler runs, so asserting on the list the moment the
+        // flag flips is a race in the test.
+        Assert.True(await WaitUntilAsync(
+            () => { lock (states) { return states.Contains(true); } },
+            TimeSpan.FromSeconds(45)));
 
-        lock (states)
-        {
-            Assert.Contains(true, states);
-        }
+        Assert.True(connection.IsConnected);
     }
 
     [Fact]

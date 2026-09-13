@@ -17,6 +17,13 @@ internal sealed class FakeClipWriter : IClipWriter
 
     internal bool Throw { get; set; }
 
+    /// <summary>
+    /// Copy each sample's bytes out for inspection. Off for tests that only care
+    /// about scheduling: reading a 30-second snapshot eight times over is ~100MB of
+    /// copying, which is pure noise for those and makes them slow on a busy host.
+    /// </summary>
+    internal bool CaptureBytes { get; set; } = true;
+
     /// <summary>Blocks writes until <see cref="Release"/>, to test queueing.</summary>
     internal void Hold() => _release.Reset();
 
@@ -31,11 +38,16 @@ internal sealed class FakeClipWriter : IClipWriter
             throw new IOException("disk on fire");
         }
 
-        var scratch = new byte[Math.Max(1, snapshot.LargestSampleLength)];
-        var bytes = new byte[snapshot.Count][];
-        for (var i = 0; i < snapshot.Count; i++)
+        var bytes = Array.Empty<byte[]>();
+
+        if (CaptureBytes)
         {
-            bytes[i] = snapshot.Read(i, scratch).ToArray();
+            var scratch = new byte[Math.Max(1, snapshot.LargestSampleLength)];
+            bytes = new byte[snapshot.Count][];
+            for (var i = 0; i < snapshot.Count; i++)
+            {
+                bytes[i] = snapshot.Read(i, scratch).ToArray();
+            }
         }
 
         lock (Written)
@@ -184,22 +196,31 @@ public sealed class ClipServiceTests
     public void AFullQueueDropsExtraRequestsRatherThanWritingFiftyFiles()
     {
         var ring = FilledRing();
-        var writer = new FakeClipWriter();
+        var writer = new FakeClipWriter { CaptureBytes = false };
         writer.Hold();
 
         using var service = new ClipService(
             ring, writer, TempDirectory(), NullEngineLog.Instance, _ => false);
 
-        for (var i = 0; i < ClipService.MaxPendingRequests; i++)
+        // Request until one is refused. Asserting an exact accept count would be a
+        // race: the clip thread may already have dequeued the first request (it is
+        // blocked inside the writer), freeing a slot.
+        var accepted = 0;
+        while (service.Request(new ClipRequest(TimeSpan.FromSeconds(5))))
         {
-            Assert.True(service.Request(new ClipRequest(TimeSpan.FromSeconds(5))));
+            accepted++;
+
+            Assert.True(
+                accepted <= ClipService.MaxPendingRequests + 1,
+                $"the queue accepted {accepted} requests; it is supposed to be bounded at " +
+                $"{ClipService.MaxPendingRequests}");
         }
 
-        Assert.False(service.Request(new ClipRequest(TimeSpan.FromSeconds(5))));
+        Assert.InRange(accepted, ClipService.MaxPendingRequests, ClipService.MaxPendingRequests + 1);
         Assert.Equal(1, service.RequestsDropped);
 
         writer.Release();
-        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(60)));
+        Assert.True(service.WaitForIdle(TimeSpan.FromSeconds(120)));
     }
 
     [Fact]
