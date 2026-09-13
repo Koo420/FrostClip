@@ -60,7 +60,7 @@ public sealed class MicrophoneStateTests
     }
 
     [Fact]
-    public void ConcurrentTogglesDoNotLoseAFlip()
+    public async Task ConcurrentTogglesDoNotLoseAFlip()
     {
         // Two threads must not both read "unmuted" and both write "muted".
         var state = new MicrophoneState();
@@ -82,7 +82,7 @@ public sealed class MicrophoneStateTests
             }
         });
 
-        Task.WaitAll(a, b);
+        await Task.WhenAll(a, b);
 
         // Every toggle is accounted for, and an even total returns to unmuted.
         Assert.Equal(perThread * 2, state.MuteChanges);

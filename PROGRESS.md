@@ -610,7 +610,34 @@ The loop is running in a **Linux** container. Consequences, and how they are han
 - [ ] Mica/animations verified to be inactive while a game window has focus
 
 ## Phase 8 — System integration
-- [ ] Tray icon with quick actions (start/stop, open gallery)
+- [x] Tray icon with quick actions (start/stop, open gallery)
+      `Tray/TrayMenuModel.cs` (portable) decides what the menu contains;
+      `Windows/Tray/TrayIcon.cs` turns that into an `HMENU` and nothing else. The
+      split is deliberate: what can be *wrong* here is which items appear, what
+      they say and when they are greyed out, and all of that is now tested.
+      The guiding rule is that the tray must never offer an action that would
+      fail — "Save clip" with nothing buffered, or "Stop recording" when nothing
+      is recording, is worse than absent, because the user clicks and gets
+      nothing with no way to know why. So the clip item is disabled (and shows
+      how much is buffered when it is not), recording controls disappear when the
+      Engine is unreachable, and a faulted Engine offers only "open the window"
+      and "quit". "Open Frost" and "Exit" are always available — a tray app you
+      cannot quit from the tray is a support ticket.
+      Implementation notes worth keeping: its own `frost-tray` thread at
+      BelowNormal, because `TrackPopupMenu` blocks its thread for as long as the
+      menu is on screen and that must never be the keyboard hook's thread or
+      capture's; a message-only window (`HWND_MESSAGE`), since that is all
+      `Shell_NotifyIcon` needs; `TPM_RETURNCMD` so the chosen item comes back
+      inline rather than as a `WM_COMMAND` from somewhere else; the icon is
+      re-added on Explorer's `TaskbarCreated` broadcast, because otherwise an
+      Explorer crash silently removes the only way to reach the app; the window
+      procedure catches everything, since an exception escaping one tears down the
+      process; and the tooltip is only pushed to the shell when its text actually
+      changes, so an idle Engine does no shell work.
+      Verified: 17 menu-model tests, including that separators never lead, trail
+      or double up, and that the tooltip stays inside Windows' 128-character limit
+      (a silently cut tooltip looks like a bug). The Win32 side compiles but was
+      not executed — needs Windows.
 - [ ] Autostart with Windows (optional, user-toggled)
 - [ ] Toast feedback on clip save (static, pre-rendered, <1.5s)
 
