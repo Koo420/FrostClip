@@ -1,8 +1,11 @@
 using System.Runtime.InteropServices;
 using Frost.Engine.Capture;
 using Frost.Engine.Diagnostics;
+using Frost.Engine.Audio;
+using Frost.Engine.Clips;
 using Frost.Engine.Encoding;
 using Frost.Engine.Windows.Encode;
+using Frost.Shared.Clips;
 using Frost.Engine.Windows.Diagnostics;
 using Frost.Engine.Ipc;
 using Frost.Shared.Ipc;
@@ -42,6 +45,7 @@ internal static partial class EngineHost
             "--encoders" => RunDiagnostic(ListEncoders),
             "--ipc-server" => RunDiagnostic(RunIpcServer),
             "--encode-test" => RunDiagnostic(log => EncodeTest(args, log)),
+            "--clip-test" => RunDiagnostic(log => ClipTest(args, log)),
             "--displays" => RunDiagnostic(ListDisplays),
             "--windows" => RunDiagnostic(ListWindows),
             "--help" or "-h" or "/?" => RunDiagnostic(PrintUsage),
@@ -265,6 +269,155 @@ internal static partial class EngineHost
         return 0;
     }
 
+    /// <summary>
+    /// Records video and loopback audio into the ring buffer, then saves a clip —
+    /// the whole instant-clip path end to end, including the audio track.
+    /// </summary>
+    private static int ClipTest(string[] args, IEngineLog log)
+    {
+        var seconds = 20.0;
+        if (args.Length > 1 && !double.TryParse(args[1], out seconds))
+        {
+            log.Error($"'{args[1]}' is not a number of seconds.");
+            return 1;
+        }
+
+        if (seconds is < 3 or > 600)
+        {
+            log.Error("Duration must be between 3 and 600 seconds.");
+            return 1;
+        }
+
+        var directory = args.Length > 2
+            ? args[2]
+            : Path.Combine(Path.GetTempPath(), "frost-clip-test");
+
+        var clipSeconds = Math.Min(10.0, seconds - 2);
+
+        using var mediaFoundation = new MediaFoundationRuntime(log);
+        using var device = GraphicsDevice.Create(CaptureTarget.PrimaryMonitor, log);
+
+        var captureConfig = new CaptureConfiguration
+        {
+            Target = CaptureTarget.PrimaryMonitor,
+            TargetFps = 60,
+        };
+
+        EncoderSettings? encoderSettings = null;
+
+        var ring = new EncodedSampleRing(new RingBufferOptions
+        {
+            MaxTrailingDuration = TimeSpan.FromSeconds(clipSeconds),
+            BitsPerSecond = 12_400_000,
+            Fps = captureConfig.TargetFps,
+        });
+
+        using var pipeline = VideoEncodePipeline.Start(
+            device,
+            captureConfig,
+            new EncoderPreferences { Codec = VideoCodec.H264 },
+            (width, height) =>
+            {
+                encoderSettings = EncoderSettings.For(
+                    VideoCodec.H264, width, height, captureConfig.TargetFps);
+                return encoderSettings;
+            },
+            ring,
+            log);
+
+        // Audio is best-effort: a machine with no playback device, or one whose
+        // endpoint reports a format we cannot read, still records video.
+        AudioCapturePipeline? audio = null;
+        try
+        {
+            var loopback = new Frost.Engine.Windows.Audio.WasapiCapture(
+                Frost.Engine.Windows.Audio.WasapiCaptureMode.Loopback, deviceId: null, log);
+
+            audio = new AudioCapturePipeline(
+                loopback,
+                TimeSpan.FromSeconds(clipSeconds * 1.5),
+                log);
+
+            audio.Start();
+            log.Info($"Loopback audio: {audio.DeviceName}, {audio.Format}.");
+        }
+        catch (Exception ex)
+        {
+            log.Warn("Loopback audio capture could not start; the clip will be silent.", ex);
+            audio?.Dispose();
+            audio = null;
+        }
+
+        try
+        {
+            var writer = new Mp4ClipWriter(
+                pipeline.GetEncodedMediaType,
+                encoderSettings ?? throw new InvalidOperationException("encoder settings were not produced"),
+                log,
+                ClipKind.InstantClip,
+                audio?.Buffer);
+
+            using var clips = new ClipService(ring, writer, directory, log);
+
+            ClipResult? result = null;
+            clips.ClipCompleted += completed => result = completed;
+
+            log.Info($"Filling the buffer for {seconds:F0}s, then saving a {clipSeconds:F0}s clip.");
+            Thread.Sleep(TimeSpan.FromSeconds(seconds));
+
+            if (!pipeline.IsCaptureRunning)
+            {
+                log.Error("Capture stopped early.");
+                return 4;
+            }
+
+            clips.Request(new ClipRequest(TimeSpan.FromSeconds(clipSeconds), $"{clipSeconds:F0}s", "clip-test"));
+
+            if (!clips.WaitForIdle(TimeSpan.FromSeconds(60)))
+            {
+                log.Error("The clip did not finish writing within 60s.");
+                return 4;
+            }
+
+            log.Info(
+                $"buffered={ring.HeldDuration.TotalSeconds:F1}s " +
+                $"video={ring.SamplesWritten} " +
+                $"audio-blocks={audio?.BlocksRouted ?? 0} " +
+                $"audio-silence-frames={audio?.SilenceFramesInserted ?? 0}");
+
+            if (result is null || !result.Succeeded)
+            {
+                log.Error($"The clip failed: {result?.Error ?? "no result"}");
+                return 5;
+            }
+
+            var info = new FileInfo(result.Metadata!.FilePath);
+            log.Info(
+                $"Wrote {info.FullName} ({info.Length / (1024.0 * 1024.0):F2}MB, " +
+                $"{result.Metadata.Duration.TotalSeconds:F1}s, written in " +
+                $"{result.WriteDuration.TotalMilliseconds:F0}ms).");
+
+            if (audio is null)
+            {
+                log.Warn("No audio was captured, so the clip has no audio track to check.");
+                return 0;
+            }
+
+            if (audio.BlocksRouted == 0)
+            {
+                log.Error("Audio capture ran but delivered nothing; the clip is silent.");
+                return 6;
+            }
+
+            log.Info("Clip written with an audio track.");
+            return 0;
+        }
+        finally
+        {
+            audio?.Dispose();
+        }
+    }
+
     /// <summary>Counts samples produced before the real sink is attached.</summary>
     private sealed class CountingSampleSink : IEncodedSampleSink
     {
@@ -355,6 +508,8 @@ internal static partial class EngineHost
               --ipc-server        run the Engine/Shell IPC server until Ctrl+C
               --encode-test [s] [out.mp4]
                                   record the primary display and write an MP4
+              --clip-test [s] [dir]
+                                  fill the ring buffer, then save a clip with audio
               --displays          list capture-able displays
               --windows           list capture-able windows
               --help              this text

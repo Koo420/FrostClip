@@ -1,3 +1,4 @@
+using Frost.Engine.Audio;
 using Frost.Engine.Clips;
 using Frost.Engine.Diagnostics;
 using Frost.Engine.Encoding;
@@ -21,17 +22,25 @@ internal sealed class Mp4ClipWriter : IClipWriter
     private readonly EncoderSettings _settings;
     private readonly IEngineLog _log;
     private readonly ClipKind _kind;
+    private readonly AudioTrackBuffer? _audio;
+    private byte[] _audioScratch = [];
 
     /// <param name="mediaTypeFactory">
     /// Supplies the encoder's current output media type, which carries the codec
     /// private data (H.264's SPS/PPS). Called per clip because the encoder can be
     /// restarted between clips.
     /// </param>
+    /// <param name="audio">
+    /// Audio to trim to the clip's window, or null for a silent clip. The same
+    /// buffer the audio capture writes into: a clip takes the slice matching its
+    /// video rather than keeping a separate copy.
+    /// </param>
     internal Mp4ClipWriter(
         Func<IMFMediaType> mediaTypeFactory,
         EncoderSettings settings,
         IEngineLog log,
-        ClipKind kind = ClipKind.InstantClip)
+        ClipKind kind = ClipKind.InstantClip,
+        AudioTrackBuffer? audio = null)
     {
         ArgumentNullException.ThrowIfNull(mediaTypeFactory);
         ArgumentNullException.ThrowIfNull(settings);
@@ -41,9 +50,68 @@ internal sealed class Mp4ClipWriter : IClipWriter
         _settings = settings;
         _log = log;
         _kind = kind;
+        _audio = audio;
     }
 
     public string Extension => ".mp4";
+
+    /// <summary>
+    /// Copies the audio covering the clip's video window into the muxer.
+    /// </summary>
+    /// <remarks>
+    /// Whole audio blocks are taken, so the audio can start a few milliseconds
+    /// before the first video frame. That is deliberate: trimming audio to the
+    /// exact frame boundary would cut a word mid-syllable, and the muxer clamps a
+    /// negative timestamp to zero.
+    /// </remarks>
+    private void WriteAudioFor(RingSnapshot snapshot, Mp4Muxer muxer)
+    {
+        if (_audio is null || snapshot.IsEmpty)
+        {
+            return;
+        }
+
+        var startTicks = snapshot[0].TimestampTicks;
+        var endTicks = snapshot[snapshot.Count - 1].EndTimestampTicks;
+
+        if (_audioScratch.Length < _audio.MaxSnapshotBytes)
+        {
+            // Grown once per writer, never per clip.
+            _audioScratch = new byte[_audio.MaxSnapshotBytes];
+        }
+
+        var audio = _audio.Snapshot(startTicks, endTicks, _audioScratch);
+
+        if (audio.IsEmpty)
+        {
+            _log.Debug("No audio covered the clip's window; writing a silent clip.");
+            return;
+        }
+
+        // One block per WASAPI packet, so the muxer's queue sees the same shape it
+        // would during a live session recording.
+        var format = _audio.Format;
+        var blockBytes = format.BytesPerFrame * (format.SampleRate / 50);
+        var offset = 0;
+
+        while (offset < audio.ByteCount)
+        {
+            var length = Math.Min(blockBytes, audio.ByteCount - offset);
+            var frames = offset / format.BytesPerFrame;
+
+            if (!muxer.TryWriteAudio(
+                    new ReadOnlySpan<byte>(_audioScratch, offset, length),
+                    audio.StartTicks + format.FramesToTicks(frames)))
+            {
+                // The audio queue is full, which means the disk is far behind.
+                // Losing the tail of the audio is better than failing the clip.
+                _log.Warn($"Audio queue full while writing {muxer.Path}; the clip's audio is short.");
+                break;
+            }
+
+            offset += length;
+        }
+    }
 
     public ClipMetadata Write(RingSnapshot snapshot, string path, ClipRequest request)
     {
@@ -58,7 +126,14 @@ internal sealed class Mp4ClipWriter : IClipWriter
             mediaType,
             _log,
             queueBytes: Math.Clamp(snapshot.TotalBytes / 4, 4L * 1024 * 1024, 64L * 1024 * 1024),
-            queueSamples: Math.Clamp(snapshot.Count, 64, 4096));
+            queueSamples: Math.Clamp(snapshot.Count, 64, 4096),
+            audioFormat: _audio?.Format);
+
+        // Audio first: the sink interleaves by timestamp anyway, and queueing the
+        // audio up front means it is already present when the video catches up,
+        // rather than the sink holding video while it waits for a track it has been
+        // told to expect.
+        WriteAudioFor(snapshot, muxer);
 
         var scratch = new byte[Math.Max(1, snapshot.LargestSampleLength)];
 

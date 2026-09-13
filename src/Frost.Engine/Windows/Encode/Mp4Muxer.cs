@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Frost.Engine.Audio;
 using Frost.Engine.Diagnostics;
 using Frost.Engine.Encoding;
 using Vortice.MediaFoundation;
@@ -35,10 +36,21 @@ internal sealed class Mp4Muxer : IEncodedSampleSink, IDisposable
     private readonly Thread _thread;
     private readonly SemaphoreSlim _work = new(0);
 
+    // Audio is a second stream on the same sink. Null when the recording has no
+    // audio, in which case every audio path here is a no-op.
+    private readonly SampleArena? _audioQueue;
+    private readonly object _audioGate = new();
+    private readonly byte[] _audioScratch = [];
+    private readonly IMFSample? _audioSample;
+    private readonly IMFMediaBuffer? _audioBuffer;
+    private readonly int _audioStreamIndex = -1;
+
     private long _samplesQueued;
     private long _samplesWritten;
     private long _samplesRefused;
     private long _bytesWritten;
+    private long _audioSamplesWritten;
+    private long _audioSamplesRefused;
     private long _firstTimestampTicks = -1;
     private volatile bool _stopping;
     private volatile bool _faulted;
@@ -50,12 +62,22 @@ internal sealed class Mp4Muxer : IEncodedSampleSink, IDisposable
     /// </param>
     /// <param name="queueBytes">Pre-allocated write queue size.</param>
     /// <param name="queueSamples">Pre-allocated write queue depth.</param>
+    /// <param name="audioFormat">
+    /// When given, a second stream is added for audio. The Sink Writer inserts the
+    /// AAC encoder for it — audio AAC encoding is a fraction of a percent of one
+    /// core, so unlike video it is not worth a hardware path and does not conflict
+    /// with the hardware-encoding-only rule, which is about the frame-rate-sized
+    /// workload.
+    /// </param>
+    /// <param name="audioBitsPerSecond">AAC bitrate. 160kbps is transparent for game audio.</param>
     internal Mp4Muxer(
         string path,
         IMFMediaType encodedType,
         IEngineLog log,
         long queueBytes = 16L * 1024 * 1024,
-        int queueSamples = 512)
+        int queueSamples = 512,
+        AudioFormat? audioFormat = null,
+        int audioBitsPerSecond = 160_000)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(encodedType);
@@ -88,6 +110,31 @@ internal sealed class Mp4Muxer : IEncodedSampleSink, IDisposable
 
         // Input type identical to the output type: passthrough, no transform.
         _writer.SetInputMediaType(_streamIndex, encodedType, null);
+
+        if (audioFormat is not null)
+        {
+            AudioFormat = audioFormat.AsInt16;
+
+            using var aac = CreateAacType(AudioFormat, audioBitsPerSecond);
+            _audioStreamIndex = _writer.AddStream(aac);
+
+            using var pcm = CreatePcmType(AudioFormat);
+            _writer.SetInputMediaType(_audioStreamIndex, pcm, null);
+
+            // One second of audio of queue: audio blocks are tiny (188KB/s) and the
+            // extra depth costs nothing, while a disk stall during a session
+            // recording should not lose any.
+            _audioQueue = new SampleArena(
+                Math.Max(1L << 20, AudioFormat.BytesFor(TimeSpan.FromSeconds(4))), 2048);
+
+            _audioScratch = new byte[Math.Min(_audioQueue.ByteCapacity, 1 << 20)];
+            _audioBuffer = MediaFactory.MFCreateMemoryBuffer(_audioScratch.Length);
+            _audioSample = MediaFactory.MFCreateSample();
+            _audioSample.AddBuffer(_audioBuffer);
+
+            log.Debug($"Muxing audio as AAC {audioBitsPerSecond / 1000}kbps from {AudioFormat}.");
+        }
+
         _writer.BeginWriting();
 
         _buffer = MediaFactory.MFCreateMemoryBuffer((int)_writeScratch.Length);
@@ -109,6 +156,16 @@ internal sealed class Mp4Muxer : IEncodedSampleSink, IDisposable
     }
 
     internal string Path { get; }
+
+    /// <summary>PCM format of the audio stream, or null when there is no audio.</summary>
+    internal AudioFormat? AudioFormat { get; }
+
+    /// <summary>Whether this file carries an audio track.</summary>
+    internal bool HasAudio => _audioStreamIndex >= 0;
+
+    internal long AudioSamplesWritten => Interlocked.Read(ref _audioSamplesWritten);
+
+    internal long AudioSamplesRefused => Interlocked.Read(ref _audioSamplesRefused);
 
     internal long SamplesWritten => Interlocked.Read(ref _samplesWritten);
 
@@ -150,6 +207,36 @@ internal sealed class Mp4Muxer : IEncodedSampleSink, IDisposable
     }
 
     /// <summary>
+    /// Queues a block of PCM audio. Same contract as
+    /// <see cref="TryWrite"/>: never blocks on disk, never allocates.
+    /// </summary>
+    public bool TryWriteAudio(ReadOnlySpan<byte> data, long timestampTicks)
+    {
+        if (_audioQueue is null || _stopping || _faulted || data.IsEmpty)
+        {
+            return false;
+        }
+
+        var format = AudioFormat!;
+        var duration = format.FramesToTicks(data.Length / format.BytesPerFrame);
+
+        bool queued;
+        lock (_audioGate)
+        {
+            queued = _audioQueue.TryAppend(data, timestampTicks, duration, isKeyFrame: true, out _);
+        }
+
+        if (!queued)
+        {
+            Interlocked.Increment(ref _audioSamplesRefused);
+            return false;
+        }
+
+        _work.Release();
+        return true;
+    }
+
+    /// <summary>
     /// Drains the queue, finalises the MP4 (writing its index) and joins the
     /// writer thread. Safe to call once.
     /// </summary>
@@ -174,9 +261,11 @@ internal sealed class Mp4Muxer : IEncodedSampleSink, IDisposable
             // so this is the one step that must not be skipped on shutdown.
             _writer.Finalize();
             _log.Info(
-                $"Wrote {Path}: {SamplesWritten} samples, " +
+                $"Wrote {Path}: {SamplesWritten} video sample(s)" +
+                $"{(HasAudio ? $", {AudioSamplesWritten} audio block(s)" : string.Empty)}, " +
                 $"{BytesWritten / (1024.0 * 1024.0):F2}MB" +
-                $"{(SamplesRefused > 0 ? $", {SamplesRefused} refused" : string.Empty)}.");
+                $"{(SamplesRefused > 0 ? $", {SamplesRefused} video refused" : string.Empty)}" +
+                $"{(AudioSamplesRefused > 0 ? $", {AudioSamplesRefused} audio refused" : string.Empty)}.");
         }
         catch (Exception ex)
         {
@@ -216,7 +305,109 @@ internal sealed class Mp4Muxer : IEncodedSampleSink, IDisposable
         }
     }
 
+    /// <summary>
+    /// Writes whichever queued sample is oldest.
+    /// </summary>
+    /// <remarks>
+    /// Interleaving by timestamp rather than draining video then audio: the MP4
+    /// sink buffers whatever it is given out of order, and feeding it a whole
+    /// session's video before any audio would make it hold the lot in memory.
+    /// </remarks>
     private bool DrainOne()
+    {
+        var videoNext = PeekVideoTimestamp();
+        var audioNext = PeekAudioTimestamp();
+
+        if (videoNext is null && audioNext is null)
+        {
+            return false;
+        }
+
+        // Prefer the older stream; when only one has anything, take it.
+        if (audioNext is not null && (videoNext is null || audioNext < videoNext))
+        {
+            return DrainAudio();
+        }
+
+        return DrainVideo();
+    }
+
+    private long? PeekVideoTimestamp()
+    {
+        lock (_queueGate)
+        {
+            return _queue.IsEmpty ? null : _queue.Peek().TimestampTicks;
+        }
+    }
+
+    private long? PeekAudioTimestamp()
+    {
+        if (_audioQueue is null)
+        {
+            return null;
+        }
+
+        lock (_audioGate)
+        {
+            return _audioQueue.IsEmpty ? null : _audioQueue.Peek().TimestampTicks;
+        }
+    }
+
+    private bool DrainAudio()
+    {
+        EncodedSample sample;
+        int length;
+
+        lock (_audioGate)
+        {
+            if (_audioQueue!.IsEmpty)
+            {
+                return false;
+            }
+
+            sample = _audioQueue.Peek();
+            length = sample.Length;
+
+            if (length > _audioScratch.Length)
+            {
+                // Cannot happen with the queue's own sizing, but dropping one block
+                // beats writing a truncated frame.
+                _audioQueue.DropOldest();
+                Interlocked.Increment(ref _audioSamplesRefused);
+                return true;
+            }
+
+            _audioQueue.CopyTo(sample, _audioScratch);
+            _audioQueue.DropOldest();
+        }
+
+        _audioBuffer!.Lock(out var pointer, out _, out _);
+        Marshal.Copy(_audioScratch, 0, pointer, length);
+        _audioBuffer.CurrentLength = length;
+        _audioBuffer.Unlock();
+
+        if (_firstTimestampTicks < 0)
+        {
+            _firstTimestampTicks = sample.TimestampTicks;
+        }
+
+        // Audio may legitimately start before the first video frame (the encoder
+        // holds frames while audio flows). Clamping rather than writing a negative
+        // timestamp, which the sink rejects.
+        var time = Math.Max(0, sample.TimestampTicks - _firstTimestampTicks);
+
+        _audioSample!.SampleTime = time;
+        _audioSample.SampleDuration = sample.DurationTicks;
+        _audioSample.SampleFlags = 1;
+
+        _writer.WriteSample(_audioStreamIndex, _audioSample);
+
+        Interlocked.Increment(ref _audioSamplesWritten);
+        Interlocked.Add(ref _bytesWritten, length);
+        return true;
+    }
+
+    private bool DrainVideo()
     {
         EncodedSample sample;
         int length;
@@ -244,7 +435,7 @@ internal sealed class Mp4Muxer : IEncodedSampleSink, IDisposable
             _firstTimestampTicks = sample.TimestampTicks;
         }
 
-        _sample.SampleTime = sample.TimestampTicks - _firstTimestampTicks;
+        _sample.SampleTime = Math.Max(0, sample.TimestampTicks - _firstTimestampTicks);
         _sample.SampleDuration = sample.DurationTicks;
         _sample.SampleFlags = sample.IsKeyFrame ? 1 : 0;
 
@@ -259,6 +450,37 @@ internal sealed class Mp4Muxer : IEncodedSampleSink, IDisposable
     {
         _buffer.Lock(out var pointer, out _, out _);
         return pointer;
+    }
+
+    /// <summary>The AAC output type for the audio stream.</summary>
+    private static IMFMediaType CreateAacType(AudioFormat format, int bitsPerSecond)
+    {
+        var type = MediaFactory.MFCreateMediaType();
+        type.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Audio);
+        type.Set(MediaTypeAttributeKeys.Subtype, AudioFormatGuids.Aac);
+        type.Set(MediaTypeAttributeKeys.AudioSamplesPerSecond, (uint)format.SampleRate);
+        type.Set(MediaTypeAttributeKeys.AudioNumChannels, (uint)format.Channels);
+        type.Set(MediaTypeAttributeKeys.AudioBitsPerSample, 16u);
+        type.Set(MediaTypeAttributeKeys.AudioAvgBytesPerSecond, (uint)(bitsPerSecond / 8));
+
+        // 0 = raw AAC, which is what an MP4 container wants (ADTS framing is for
+        // streaming).
+        type.Set(MediaTypeAttributeKeys.AacPayloadType, 0u);
+        return type;
+    }
+
+    /// <summary>The PCM input type the Sink Writer's AAC encoder reads.</summary>
+    private static IMFMediaType CreatePcmType(AudioFormat format)
+    {
+        var type = MediaFactory.MFCreateMediaType();
+        type.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Audio);
+        type.Set(MediaTypeAttributeKeys.Subtype, AudioFormatGuids.Pcm);
+        type.Set(MediaTypeAttributeKeys.AudioSamplesPerSecond, (uint)format.SampleRate);
+        type.Set(MediaTypeAttributeKeys.AudioNumChannels, (uint)format.Channels);
+        type.Set(MediaTypeAttributeKeys.AudioBitsPerSample, 16u);
+        type.Set(MediaTypeAttributeKeys.AudioBlockAlignment, (uint)format.BytesPerFrame);
+        type.Set(MediaTypeAttributeKeys.AudioAvgBytesPerSecond, (uint)format.BytesPerSecond);
+        return type;
     }
 
     public void Dispose()
@@ -277,6 +499,8 @@ internal sealed class Mp4Muxer : IEncodedSampleSink, IDisposable
 
         _sample.Dispose();
         _buffer.Dispose();
+        _audioSample?.Dispose();
+        _audioBuffer?.Dispose();
         _writer.Dispose();
         _work.Dispose();
     }

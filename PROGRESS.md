@@ -503,7 +503,51 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       them on a heavily loaded host.
 
 ## Phase 6 — Audio
-- [ ] WASAPI loopback capture muxed into clips
+- [x] WASAPI loopback capture muxed into clips
+      `Windows/Audio/WasapiCapture.cs` captures the render endpoint with
+      `AUDCLNT_STREAMFLAGS_LOOPBACK`; `Audio/AudioCapturePipeline.cs` routes each
+      block to the clip buffer, the session recording and the loudness detector;
+      `Mp4Muxer` gained a second stream, and `Mp4ClipWriter` trims audio to the
+      clip's video window.
+      Vortice projects `IMMDeviceEnumerator`/`IMMDevice` but **not
+      `IAudioClient`**, and loopback needs it (Media Foundation's own audio
+      capture covers microphones only). Both missing interfaces are hand-written
+      in `WasapiInterop.cs`: they are small, their vtable order has been fixed
+      since Vista, and the alternative was taking a whole audio library into a
+      process with a 50MB budget. Slot numbers are commented with their methods,
+      since an off-by-one there is a crash rather than a compile error.
+      Decisions worth recording:
+      * **Polling, not the event callback.** WASAPI does not raise its event for a
+        loopback stream while nothing is playing, so an event-driven loopback
+        capture stops until audio resumes — and with it any chance of noticing the
+        gap. Polling at half the device period sees the silence.
+      * **Silence is written, gaps are not closed.** This is the correctness point
+        of the whole phase and lives in the tested `AudioTimeline`: closing a gap
+        moves every later sample earlier relative to the video, cumulatively and
+        permanently.
+      * **Shared mode, never exclusive** — exclusive would take the device away
+        from the game.
+      * **No resampling.** The endpoint's rate and channel count are captured and
+        muxed as they are; only float32→int16 is converted, because the AAC
+        encoder wants it and it is a multiply and a clamp.
+      * WASAPI's buffer is released immediately after copying, because holding it
+        stalls the audio endpoint for every application on the machine, not just
+        Frost.
+      * A silent packet's buffer contents are *undefined*, so it is written as
+        real silence rather than copied.
+      * An endpoint reporting 24-bit integer samples is refused with an
+        actionable message rather than silently misinterpreted.
+      * The **AAC encode is software**, via the Sink Writer's own encoder. That
+        does not conflict with the hardware-encoding-only rule, which is about the
+        frame-rate-sized video workload: AAC at 160kbps is a fraction of a percent
+        of one core. Stated here so it is a decision, not an oversight.
+      A device disappearing mid-session (headphones unplugged, default device
+      changed) stops the audio track and leaves the video running.
+      `Frost.Engine.exe --clip-test [seconds] [dir]` exercises the whole path and
+      fails with distinct exit codes if the clip is silent or never written.
+      Verified: 47 audio tests (format, conversion, buffer, timeline, pipeline),
+      including routing with zero allocation on the capture thread. The WASAPI
+      interop itself compiles but was not executed — needs Windows.
 - [ ] Optional mic capture as a second track, user-toggleable
 
 ## Phase 7 — Shell UI

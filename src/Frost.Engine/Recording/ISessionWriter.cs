@@ -27,4 +27,17 @@ public interface ISessionWriter : IDisposable
 
     /// <summary>Flushes and finalises the file. Called off the encode thread.</summary>
     void Finish(TimeSpan timeout);
+
+    /// <summary>
+    /// Queues a block of PCM audio, if this writer has an audio track.
+    /// </summary>
+    /// <remarks>
+    /// A default implementation so a writer without audio — and every test fake —
+    /// does not have to say so. Called on the audio capture thread, so the same
+    /// no-blocking, no-allocating rules apply.
+    /// </remarks>
+    bool TryWriteAudio(ReadOnlySpan<byte> data, long timestampTicks) => false;
+
+    /// <summary>Whether this writer has an audio track at all.</summary>
+    bool HasAudio => false;
 }
