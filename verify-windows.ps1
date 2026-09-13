@@ -33,14 +33,40 @@
 [CmdletBinding()]
 param(
     [int]$Seconds = 30,
-    [string]$OutputPath = (Join-Path $PSScriptRoot 'artifacts/windows-verification.md'),
+    [string]$OutputPath,
     [switch]$SkipSoak
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Continue'   # a failing step is a result, not a crash
 
-$repoRoot = $PSScriptRoot
+# Resolved defensively rather than from $PSScriptRoot alone. Windows PowerShell
+# 5.1 leaves $PSScriptRoot empty inside a param() default, and it is also empty
+# when a script is dot-sourced or piped rather than run with -File, so each
+# source is tried in turn and the working directory is the last resort.
+$scriptPath =
+    if ($PSCommandPath) { $PSCommandPath }
+    elseif ($PSScriptRoot) { Join-Path $PSScriptRoot 'verify-windows.ps1' }
+    elseif ($MyInvocation.MyCommand.Path) { $MyInvocation.MyCommand.Path }
+    else { $null }
+
+$repoRoot = if ($scriptPath) { Split-Path -Parent $scriptPath } else { (Get-Location).Path }
+
+# If that landed somewhere without the solution in it, the working directory is
+# more likely right than a guess, and saying so beats building paths that fail
+# one step later with a less obvious message.
+if (-not (Test-Path (Join-Path $repoRoot 'Frost.sln'))) {
+    if (Test-Path (Join-Path (Get-Location).Path 'Frost.sln')) {
+        $repoRoot = (Get-Location).Path
+    } else {
+        Write-Error "Could not find Frost.sln. Run this from the repository root."
+        exit 2
+    }
+}
+
+if (-not $OutputPath) {
+    $OutputPath = Join-Path $repoRoot 'artifacts/windows-verification.md'
+}
 $scratch = Join-Path ([System.IO.Path]::GetTempPath()) "frost-verify-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $scratch | Out-Null
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $OutputPath) | Out-Null
@@ -61,12 +87,37 @@ function Invoke-Step {
     Write-Host "==> $Name" -ForegroundColor Cyan
 
     $global:LASTEXITCODE = 0
-    $output = & $Body 2>&1 | Out-String
+
+    # Pre-assigned: when a command cannot be launched at all, the assignment
+    # below never happens and StrictMode then throws on the first use of it.
+    $output = ''
+    $launched = $true
+
+    try {
+        $output = & $Body 2>&1 | Out-String
+
+        # Captured immediately, before anything else can overwrite it. This is
+        # the load-bearing line of the whole script: a command that does not
+        # exist, or cannot be launched, writes an error and leaves
+        # $LASTEXITCODE at 0 - so judging by exit code alone reports PASS for a
+        # step that never ran. A verification script that reports a false green
+        # is worse than no script.
+        $launched = $?
+    }
+    catch {
+        $output = ($_ | Out-String)
+        $launched = $false
+    }
 
     # Read through Get-Variable: StrictMode turns a bare $LASTEXITCODE into an
     # error when no external command has run yet in this session.
     $code = (Get-Variable -Name LASTEXITCODE -Scope Global -ValueOnly -ErrorAction SilentlyContinue)
     if ($null -eq $code) { $code = 0 }
+
+    if (-not $launched -and $code -eq 0) {
+        $code = 127
+        $output = "$($output.TrimEnd())`n[the command could not be run - reported as exit 127]"
+    }
 
     $verdict = if ($code -eq 0) { 'PASS' } else { 'FAIL' }
     $meaning = if ($ExitMeanings.ContainsKey($code)) { $ExitMeanings[$code] } else { $null }
@@ -180,6 +231,7 @@ Invoke-Step -Name 'End-to-end encode, with GPU engine attribution' `
     -ExitMeanings @{
         5 = 'no keyframes were produced - the encoder ran but the output is unusable'
         6 = 'encoding was NOT on the GPU video encode engine, which breaks the hardware-only rule'
+        127 = 'the command could not be run at all'
     } `
     -Body { & $engine --encode-test $Seconds (Join-Path $scratch 'encode-test.mp4') }
 
