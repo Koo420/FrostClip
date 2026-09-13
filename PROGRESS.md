@@ -728,6 +728,41 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       Left for Windows: the XAML pages themselves, the key-capture control that
       turns a keypress into a `HotkeyBinding`, and the folder picker.
 - [ ] Mica/animations verified to be inactive while a game window has focus
+      **Policy half done and tested; the on-screen verification needs Windows.**
+      `Frost.Shared/Shell/VisualEffectsPolicy.cs` is the spec's sixth constraint
+      as code, and writing it turned up something worth recording: the visible
+      effects are not the expensive part. Mica is composited by the system and
+      costs almost nothing once the window stops being redrawn. The real cost of
+      a Shell left open behind a game is the **status poll** — a dashboard asking
+      the Engine for state every 250ms wakes two processes, serialises JSON and
+      marshals to a UI thread four times a second, forever, while the user is
+      playing and cannot see any of it. So `StatusPollInterval` goes to null in
+      `BackgroundWhileGaming`, not just Mica and animations.
+      Four states rather than a foreground/background boolean, because alt-tabbed
+      to a browser is not the same as a game having focus: `Background` keeps a
+      5-second poll so a window brought forward is not showing a minute-old
+      buffer length, while `BackgroundWhileGaming` and `Hidden` spend nothing.
+      `ShouldRefreshOnActivation` is the necessary other half — with the poll
+      stopped, the dashboard holds whatever was true when the game took focus, so
+      it must refresh on activation rather than up to half a second later.
+      How the Shell knows a game has focus is deliberately not decided here: it
+      is a compositor-level observation (the foreground window is not ours and
+      covers a monitor) made in the Windows layer and passed in as a flag. Frost
+      never injects into or reads from a game process, so nothing better is
+      available and nothing better is wanted.
+      Verified: 17 tests. Two are about states disagreeing: our own focused
+      window is never classified as a game playing (the flags disagree for a
+      moment during an alt-tab, and resolving it the other way would blank the
+      window the user just switched to), and a minimised window is `Hidden` even
+      when Windows still calls it foreground. One asserts every state's
+      `MayDoRecurringWork` agrees with whether it carries a poll interval, so the
+      two cannot drift; one asserts an unknown state *throws* rather than
+      falling through to the foreground budget, because a new state that quietly
+      costs a game its frame times is exactly this constraint's failure mode.
+      Left for Windows — and this is the task's actual acceptance criterion:
+      observe on a real machine that the backdrop and transitions are off while
+      a game is focused, and confirm with PresentMon (Phase 9's procedure) that
+      leaving the Shell open changes nothing about the game's frame times.
 
 ## Phase 8 — System integration
 - [x] Tray icon with quick actions (start/stop, open gallery)
