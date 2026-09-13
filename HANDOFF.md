@@ -5,8 +5,14 @@ task state and carries a per-task note on what was verified and how.
 
 ## Where things stand
 
-**26 of 31 checklist tasks done.** Phases 0–6 and 8 complete. 613 unit tests, all
-passing (`./build.sh`, or `./build.ps1` on Windows).
+**26 of 31 checklist tasks done, and the remaining five are each half-built.**
+Phases 0–6 and 8 complete. 750 unit tests, all passing, clean build across both
+target frameworks (`./build.sh`, or `./build.ps1` on Windows).
+
+Every task this host can finish is finished. The five unchecked boxes all need a
+Windows machine — three to measure, one to compile XAML, one to build an MSIX —
+and each has had its portable half written and tested here, with a `PROGRESS.md`
+note saying precisely what is left to do on Windows.
 
 | Phase | State |
 | --- | --- |
@@ -17,7 +23,7 @@ passing (`./build.sh`, or `./build.ps1` on Windows).
 | 4 — Hotkeys, settings, IPC | done |
 | 5 — Full-session + autoclip | done |
 | 6 — Audio (loopback + mic) | done |
-| 7 — Shell UI | **deferred by the user** — 4 tasks, cannot build here |
+| 7 — Shell UI | 4 tasks: policy done + tested, **XAML needs Windows** |
 | 8 — System integration | done (tray, autostart, toast) |
 | 9 — Performance pass | 3 tasks, **blocked on real hardware** |
 | 10 — Packaging | 2 tasks, **blocked on Windows MSIX tooling + a cert** |
@@ -27,6 +33,11 @@ passing (`./build.sh`, or `./build.ps1` on Windows).
 Every task that can be done on a Linux host is done. The five remaining tasks all
 need a Windows machine, and `PROGRESS.md` has a blocker preamble for each phase
 explaining exactly what is missing and what was built around it.
+
+The Shell's whole policy layer now lives in `src/Frost.Shared/Shell/`, tested on
+this host: `DashboardModel`, `GalleryView`, `ClipRename`, `TrimPlanner`,
+`SettingsEditor`, `HotkeyRebind`, `VisualEffectsPolicy`. Phase 7 on Windows is
+therefore XAML, binding and Win32 plumbing — no remaining decisions.
 
 **On a Windows box, in this order:**
 
@@ -41,12 +52,20 @@ explaining exactly what is missing and what was built around it.
    checked mechanically; an unmeasured line reports "not measured" and
    `IsFullyMet` is false when anything is missing, so "we did not check" can never
    read as "it passed". Then fill in the README table and check the boxes.
-2. **Phase 7** — the WinUI 3 Shell. Four tasks: dashboard, clip gallery, settings
-   UI, and verifying Mica/animations are inactive while a game has focus. The
-   user chose to skip this rather than have it stubbed. `Frost.Shell.csproj`
-   exists and is in `Frost.sln` (not in `Frost.Linux.slnf`); `EngineConnection`
-   in `Frost.Shared/Ipc/` is the client side and is already self-healing and
-   tested, so the UI work is UI work.
+2. **Phase 7** — the WinUI 3 Shell: `App.xaml`, a window with Mica, and three
+   pages binding to the models above. `Frost.Shell.csproj` exists and is in
+   `Frost.sln` (not in `Frost.Linux.slnf`) and deliberately does not yet
+   reference an `app.manifest`; `EngineConnection` in `Frost.Shared/Ipc/` is the
+   client side, already self-healing and tested. Specifically still to write:
+   the thumbnail grid and its cache, reveal-in-Explorer
+   (`SHOpenFolderAndSelectItems`), the Sink Writer re-mux that executes a
+   `TrimRange`, the key-capture control that turns a keypress into a
+   `HotkeyBinding`, the folder picker, and the compositor-level check that sets
+   `isGameInForeground` for `VisualEffectsPolicy.Classify`.
+   Task 4's acceptance criterion is an observation, not a unit test: watch that
+   the backdrop and transitions are off while a game is focused, and confirm
+   with PresentMon that leaving the Shell open changes nothing about the game's
+   frame times.
 3. **Phase 10** — write `Frost.Package.wapproj`, build the package, and add a
    `--uninstall-check` verb wiring `UninstallCheck` to real registry and
    filesystem enumeration so the uninstall task is verified by one command rather
@@ -131,6 +150,16 @@ that rule is about video, and AAC on a CPU is negligible.
 9. **Exactly-zero allocation assertions are flaky** under tiered-compilation OSR.
    `AllocationAssert.NoPerIterationAllocation` uses a bound of <1 byte per
    iteration (the smallest object is 24 bytes, so anything real is caught).
+10. **`Path`'s file-name rules are the *host's*, not Windows'.** On Linux
+   `Path.GetInvalidFileNameChars` accepts `:` and `?`, and
+   `Path.GetDirectoryName` does not split a backslash path at all. Anything
+   validating a name or path for the target file system has to spell the rules
+   out — see `ClipRename`. Same for test fixtures: build Windows paths with a
+   literal `\`, not `Path.Combine`.
+11. **Reflection in `Frost.Shared` is an AOT trim warning.** The Engine is
+   published AOT, so reflecting over the settings schema there produced IL2075.
+   Checks that only matter while the code is changing belong in the test
+   project — `SettingsUiTests` reflects, `SettingsEditor` does not.
 
 ## What still needs real Windows hardware
 
@@ -171,8 +200,9 @@ Windows box is available, run in this order:
 - Platform-agnostic policy is deliberately extracted so it can be tested on any
   host: `FrameRouter`, `EncoderSelector`, `EncodeAttribution`, `HookWatchdog`,
   `ClipNaming`, `AudioTimeline`, `TrayMenuModel`, `AutostartPlan`, `ToastPolicy`,
-  `PerformanceBudget`, `UninstallCheck`. Prefer that shape over testing through
-  Windows types — it is why 613 tests run on a host that cannot run the app.
+  `PerformanceBudget`, `UninstallCheck`, and all of `Frost.Shared/Shell/`. Prefer
+  that shape over testing through Windows types — it is why 750 tests run on a
+  host that cannot run the app.
 - Tests that assert *that* something happens use generous timeouts; only tests
   asserting *how fast* are tight. The container has run 3× slower on some days.
 - Test names read as sentences describing the behaviour and the failure they
