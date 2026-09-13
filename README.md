@@ -60,4 +60,72 @@ the Windows TFM still compiles, so the interop is genuinely type-checked.
 
 ## Performance
 
-Not yet measured on real hardware; see Phase 9 in `PROGRESS.md`.
+**Not yet measured.** The table below is the budget, not results. Frost has been
+developed on a Linux host where the Windows capture and encode paths compile and
+are type-checked but cannot run, so every figure here is blank until someone runs
+the procedure on a Windows machine with a hardware encoder. A blank row means "not
+measured" — it does not mean "passed".
+
+| Budget line | Limit | Measured |
+| --- | --- | --- |
+| Engine idle CPU | < 1% of machine | — |
+| Engine idle memory | < 50 MB working set | — |
+| Engine recording CPU (1080p60) | < 3% of machine | — |
+| Game frame-time increase | none measurable | — |
+| Hotkey press → toast on screen | < 150 ms | — |
+
+### How to fill it in
+
+Build and publish first: `./build.ps1 -Publish` puts an AOT-compiled
+`Frost.Engine.exe` in `artifacts/Frost.Engine`.
+
+**1. The three lines the Engine can measure itself.**
+
+```powershell
+.\Frost.Engine.exe --benchmark 120
+```
+
+Prints a report checked against the budget and exits non-zero if a *measured*
+line is over. It measures idle CPU and memory, and CPU while ring-buffering
+1080p60. Run it on an otherwise quiet machine; anything else using the GPU's
+encoder will show up here.
+
+**2. Which GPU engine is doing the encoding.**
+
+```powershell
+.\Frost.Engine.exe --encode-test 60
+```
+
+Reads the same per-process GPU counters Task Manager's GPU columns come from and
+exits 6 if the video-encode engine was not the one working. This is the check
+that catches encoding silently landing on the 3D engine or a software path.
+
+**3. Game frame-time increase — needs an actual game.**
+
+There is no way to measure "did not cost the game frames" without a game, so
+this one is manual:
+
+- Install [PresentMon](https://github.com/GameTechDev/PresentMon).
+- Pick a game that holds a steady frame rate on a repeatable scene (a benchmark
+  scene, a menu, or a replay — not live multiplayer).
+- Capture ~60 seconds with Frost's Engine not running:
+  `PresentMon.exe -process_name game.exe -output_file before.csv -timed 60`
+- Start the Engine (`--benchmark 3600` is a convenient way to keep it
+  ring-buffering), and capture the same scene again to `after.csv`.
+- Compare the 95th and 99th percentile frame times, not the averages. An average
+  hides exactly the kind of intermittent hitch that matters, and a capture tool's
+  cost shows up as occasional long frames rather than a uniform slowdown.
+- Record both percentiles in the table above. The budget is that the difference
+  is within run-to-run noise for that scene; establish what that noise is by
+  running `before` twice.
+
+**4. Hotkey to toast — needs the screen observed.**
+
+The budget is about what the user perceives, so timing the code path is not
+sufficient. Record the screen with a phone at 240fps (or a second capture card),
+press the clip hotkey, and count frames from keypress to the toast appearing.
+Anything under 36 frames at 240fps is inside the 150ms budget.
+
+Note that the toast is deliberately shown on the keypress ("Saving clip…") and
+replaced when the file is written, so this measures the feedback path and not the
+disk.

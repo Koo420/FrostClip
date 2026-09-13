@@ -705,6 +705,31 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       — needs Windows.
 
 ## Phase 9 — Performance pass
+
+> **Cannot be completed on this build host.** Every task in this phase asks for
+> *measured numbers*, and the Windows capture/encode path does not run here. The
+> harness is built and the procedures are documented, so a Windows run is a
+> handful of commands — but the boxes stay unchecked, because writing figures into
+> the README that were never measured would be worse than leaving it blank.
+>
+> What exists now:
+> * `Diagnostics/PerformanceBudget.cs` encodes the spec's five budget lines as
+>   data, so a run is checked mechanically rather than by reading a table. An
+>   unmeasured line reports "not measured" and `IsFullyMet` is explicitly false
+>   when anything is missing — "we did not check" must never read as "it passed".
+>   13 tests.
+> * `Frost.Engine.exe --benchmark [seconds]` measures the three lines measurable
+>   without a game (idle CPU, idle memory, recording CPU) and exits non-zero if a
+>   *measured* line is over budget.
+> * `Frost.Engine.exe --encode-test` already checks GPU engine attribution from
+>   PDH counters (Phase 2).
+> * README now carries the budget table with every result blank and marked as
+>   such, plus the full procedure for the two lines that need a real game
+>   (PresentMon before/after, comparing 95th/99th percentile frame times rather
+>   than averages, since a capture tool's cost shows up as occasional long frames)
+>   and a screen-observed measurement for hotkey-to-toast latency.
+
+
 - [ ] PresentMon before/after comparison documented in README
 - [ ] Idle and active CPU/RAM/GPU numbers documented against the budget above
 - [ ] Any budget miss investigated and fixed or explicitly justified

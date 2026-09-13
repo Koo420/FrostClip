@@ -46,6 +46,7 @@ internal static partial class EngineHost
             "--ipc-server" => RunDiagnostic(RunIpcServer),
             "--encode-test" => RunDiagnostic(log => EncodeTest(args, log)),
             "--clip-test" => RunDiagnostic(log => ClipTest(args, log)),
+            "--benchmark" => RunDiagnostic(log => Benchmark(args, log)),
             "--displays" => RunDiagnostic(ListDisplays),
             "--windows" => RunDiagnostic(ListWindows),
             "--help" or "-h" or "/?" => RunDiagnostic(PrintUsage),
@@ -267,6 +268,138 @@ internal static partial class EngineHost
             $"{attributionReport.ProcessCpuPercent:F2}% CPU.");
 
         return 0;
+    }
+
+    /// <summary>
+    /// Measures every line of the performance budget it can measure without a
+    /// game running, and prints a report.
+    /// </summary>
+    /// <remarks>
+    /// <para>Three of the five budget lines are measurable from here: idle CPU and
+    /// memory (armed, not recording), and active CPU while ring-buffering. The
+    /// other two are not, and the report says so rather than guessing:</para>
+    /// <list type="bullet">
+    /// <item><b>Game frame-time increase</b> needs an actual game and PresentMon;
+    /// there is no way to measure "did not cost the game frames" without a game.
+    /// </item>
+    /// <item><b>Hotkey to toast</b> needs the overlay on screen and a camera or a
+    /// high-speed capture of it — the code path can be timed, but the budget is
+    /// about what the user perceives.</item>
+    /// </list>
+    /// </remarks>
+    private static int Benchmark(string[] args, IEngineLog log)
+    {
+        var seconds = 60.0;
+        if (args.Length > 1 && !double.TryParse(args[1], out seconds))
+        {
+            log.Error($"'{args[1]}' is not a number of seconds.");
+            return 1;
+        }
+
+        if (seconds is < 20 or > 3600)
+        {
+            log.Error("Benchmark duration must be between 20 and 3600 seconds.");
+            return 1;
+        }
+
+        var measurements = new Dictionary<string, double>();
+        var half = TimeSpan.FromSeconds(seconds / 2);
+
+        using var mediaFoundation = new MediaFoundationRuntime(log);
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+
+        // --- Idle: armed, not recording ---
+        //
+        // "Armed" for the Engine means the ring buffer exists and capture is
+        // running; what makes it idle is that nothing is being written to disk.
+        log.Info($"Measuring idle (armed, not recording) for {half.TotalSeconds:F0}s…");
+
+        using (var device = GraphicsDevice.Create(CaptureTarget.PrimaryMonitor, log))
+        {
+            var captureConfig = new CaptureConfiguration
+            {
+                Target = CaptureTarget.PrimaryMonitor,
+                TargetFps = 60,
+            };
+
+            var ring = new EncodedSampleRing(new RingBufferOptions
+            {
+                MaxTrailingDuration = TimeSpan.FromSeconds(30),
+                BitsPerSecond = 12_400_000,
+                Fps = 60,
+            });
+
+            using var pipeline = VideoEncodePipeline.Start(
+                device,
+                captureConfig,
+                new EncoderPreferences { Codec = VideoCodec.H264 },
+                (width, height) => EncoderSettings.For(VideoCodec.H264, width, height, 60),
+                ring,
+                log);
+
+            var sample = MeasureWindow(self, half);
+
+            // Ring-buffering with the encoder running is the "active" line; the
+            // Engine has no armed-but-not-encoding mode, because the buffer is
+            // what makes a clip instant.
+            measurements[PerformanceBudget.ActiveCpuPercent.Name] = sample.CpuPercent;
+            measurements[PerformanceBudget.IdleMemoryMegabytes.Name] = sample.WorkingSetMegabytes;
+
+            log.Info(
+                $"recording: cpu={sample.CpuPercent:F2}% " +
+                $"rss={sample.WorkingSetMegabytes:F1}MB " +
+                $"frames={pipeline.FramesEncoded} " +
+                $"dropped={pipeline.FramesDroppedByCapture}");
+        }
+
+        // --- Idle: nothing running at all ---
+        log.Info($"Measuring idle (nothing capturing) for {half.TotalSeconds:F0}s…");
+        var idle = MeasureWindow(self, half);
+        measurements[PerformanceBudget.IdleCpuPercent.Name] = idle.CpuPercent;
+
+        log.Info($"idle: cpu={idle.CpuPercent:F2}% rss={idle.WorkingSetMegabytes:F1}MB");
+
+        log.Info(Environment.NewLine + PerformanceBudget.Report(measurements));
+
+        log.Warn(
+            "Game frame-time increase and hotkey-to-toast latency are not measured here: " +
+            "the first needs a real game plus PresentMon, the second needs the overlay " +
+            "observed on screen. See README for both procedures.");
+
+        // Non-zero only when something that *was* measured came in over budget.
+        // An unmeasured line is not a failure of this run.
+        var over = PerformanceBudget.AllLines
+            .Where(line => measurements.ContainsKey(line.Name))
+            .Count(line => measurements[line.Name] > line.Limit);
+
+        return over == 0 ? 0 : 7;
+    }
+
+    /// <summary>CPU and memory over a window.</summary>
+    private static (double CpuPercent, double WorkingSetMegabytes) MeasureWindow(
+        System.Diagnostics.Process self, TimeSpan window)
+    {
+        self.Refresh();
+        var startCpu = self.TotalProcessorTime;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var peakWorkingSet = 0L;
+
+        while (clock.Elapsed < window)
+        {
+            Thread.Sleep(250);
+            self.Refresh();
+            peakWorkingSet = Math.Max(peakWorkingSet, self.WorkingSet64);
+        }
+
+        clock.Stop();
+        self.Refresh();
+
+        // Share of the whole machine, which is how the budget is expressed.
+        var cpuSeconds = (self.TotalProcessorTime - startCpu).TotalSeconds;
+        var cpuPercent = cpuSeconds / clock.Elapsed.TotalSeconds / Environment.ProcessorCount * 100.0;
+
+        return (cpuPercent, peakWorkingSet / (1024.0 * 1024.0));
     }
 
     /// <summary>
@@ -559,6 +692,7 @@ internal static partial class EngineHost
               --ipc-server        run the Engine/Shell IPC server until Ctrl+C
               --encode-test [s] [out.mp4]
                                   record the primary display and write an MP4
+              --benchmark [s]     measure the performance budget (default 60s)
               --clip-test [s] [dir] [--mic]
                                   fill the ring buffer, then save a clip with audio
                                   (--mic adds the microphone as a second track)
