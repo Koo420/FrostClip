@@ -668,7 +668,41 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       scheduled task, and that the packaged mechanism leaves Frost nothing to
       clean up. The registry/WinRT side compiles but was not executed — needs
       Windows.
-- [ ] Toast feedback on clip save (static, pre-rendered, <1.5s)
+- [x] Toast feedback on clip save (static, pre-rendered, <1.5s)
+      `Overlay/ToastPolicy.cs` (portable) owns the lifetime rules;
+      `Windows/Overlay/ToastOverlay.cs` puts a pre-rendered image on screen.
+      The spec allows exactly one UI cost while a game has focus, so the design
+      is built to be only that:
+      * **Pre-rendered.** Every toast image is drawn once at startup into a 32-bit
+        premultiplied DIB. Showing one is a single `UpdateLayeredWindow` call that
+        hands Windows finished pixels — there is no `WM_PAINT` handler and nothing
+        is drawn at show time. The visible set is a closed enum precisely so the
+        whole set *can* be pre-rendered; anything needing text composed at show
+        time (a filename, a counter) would mean rendering while a game is in the
+        foreground.
+      * **Under 1.5s, enforced not hoped for.** 1.2s default against a 1.5s
+        ceiling, and a configured value over the ceiling is clamped rather than
+        throwing — a config asking for three seconds should get a compliant toast,
+        not a startup failure. A test hammers 200 requests and confirms nothing
+        stays up beyond the ceiling after the last one.
+      * **Replaces, never stacks.** Two toasts at once would be two windows, and a
+        queue of them could outlast the ceiling between them.
+      * **Feedback on the keypress.** "Saving clip…" goes up immediately and is
+        superseded by "Clip saved ✓" when the write finishes, which is what makes
+        the sub-150ms budget reachable without waiting on a disk.
+      * **Idle costs nothing.** With nothing on screen the overlay thread blocks
+        in `GetMessage`; with something up it waits exactly until it should come
+        down.
+      Window style notes: `WS_EX_NOACTIVATE` because stealing focus from a
+      fullscreen game is the worst thing an overlay can do; `WS_EX_TRANSPARENT` so
+      clicks pass through; `WS_EX_TOOLWINDOW` to stay out of Alt-Tab; topmost so
+      it shows over a borderless game; top-right placement to avoid the
+      bottom-left where games put killfeeds and chat. The panel is filled by
+      writing premultiplied pixels directly rather than through GDI, because GDI's
+      drawing calls do not produce premultiplied alpha and the result is a bright
+      fringe around the panel.
+      Verified: 15 policy tests. The Win32/GDI side compiles but was not executed
+      — needs Windows.
 
 ## Phase 9 — Performance pass
 - [ ] PresentMon before/after comparison documented in README
