@@ -341,6 +341,29 @@ The loop is running in a **Linux** container. Consequences, and how they are han
       handling, the quarantine path, and a case that clamps 13 bad values at
       once and asserts every one is reported.
 - [x] Named-pipe IPC server in Engine; basic client in Shell; round-trip tested
+      **Windows run, 2026-09-14: this shipped broken and is now fixed.** The
+      Engine could not open its pipe at all — `PipeOptions.CurrentUserOnly`
+      combined with an explicit `PipeSecurity` throws `ArgumentException`, so
+      `--ipc-server` died on the first accept and the Shell could never have
+      connected to a running Engine.
+      Every IPC test here passed the whole time, because the ACL code sat behind
+      `#if WINDOWS`: it compiled on the build host and never executed, and the
+      round-trip tests silently exercised the `#else` branch. That is the real
+      lesson — a platform-conditional branch is code the test suite cannot run,
+      and putting one in the pipe-creation path made a crash-on-startup
+      invisible.
+      Fixed by deleting the ACL branch rather than correcting it.
+      `CurrentUserOnly` already does what the ACL was for (it replaces the
+      over-generous default DACL with one granting the creating user alone), and
+      it does something on the *client* side an ACL cannot: .NET verifies the
+      pipe's owner, without which any process could create a pipe of this name
+      first and receive the Shell's traffic. So it is load-bearing at both ends
+      and is now the only mechanism, with one code path for both platforms —
+      which means these tests now cover the code that actually ships.
+      Verified: 3 added structural tests, one asserting `IpcServer.cs` contains
+      no conditional-compilation directive at all. They read the source with
+      comments stripped, because the first version matched the doc comment
+      explaining the bug — writing down the fix broke the test guarding it.
       `Frost.Shared/Ipc/` holds the contracts, framing and client;
       `Frost.Engine/Ipc/IpcServer.cs` the server, behind an `IEngineCommands`
       seam the Engine host implements and tests fake. This is the one part of

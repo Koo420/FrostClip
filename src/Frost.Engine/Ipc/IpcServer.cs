@@ -1,10 +1,6 @@
 using System.IO.Pipes;
 using Frost.Engine.Diagnostics;
 using Frost.Shared.Ipc;
-#if WINDOWS
-using System.Security.AccessControl;
-using System.Security.Principal;
-#endif
 
 namespace Frost.Engine.Ipc;
 
@@ -398,34 +394,40 @@ public sealed class IpcServer : IAsyncDisposable
         }
     }
 
-    private static NamedPipeServerStream CreatePipe(string pipeName)
-    {
-#if WINDOWS
-        // The default DACL on a named pipe is more generous than a channel
-        // carrying settings and accepting "write a file here" should be.
-        var security = new PipeSecurity();
-        using var identity = WindowsIdentity.GetCurrent();
-        security.AddAccessRule(new PipeAccessRule(
-            identity.User!, PipeAccessRights.FullControl, AccessControlType.Allow));
-
-        return NamedPipeServerStreamAcl.Create(
-            pipeName,
-            PipeDirection.InOut,
-            maxNumberOfServerInstances: 1,
-            PipeTransmissionMode.Byte,
-            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly,
-            inBufferSize: 0,
-            outBufferSize: 0,
-            security);
-#else
-        return new NamedPipeServerStream(
+    /// <summary>
+    /// Creates the listening pipe.
+    /// </summary>
+    /// <remarks>
+    /// <para><see cref="PipeOptions.CurrentUserOnly"/> is what restricts the
+    /// channel, and it is deliberately the only mechanism used. The default DACL
+    /// on a named pipe is more generous than a channel that carries settings and
+    /// accepts "write a file here" should be, and this option replaces it with
+    /// one granting the creating user alone.</para>
+    ///
+    /// <para>It also does something on the <i>client</i> side that an ACL cannot:
+    /// <see cref="IpcClient"/> passes the same option, which makes .NET verify
+    /// that the pipe it connected to is owned by the same user. Without that
+    /// check, any process on the machine could create a pipe of this name first
+    /// and receive the Shell's traffic. So the option is load-bearing at both
+    /// ends and must stay on both.</para>
+    ///
+    /// <para>An earlier version also built a <c>PipeSecurity</c> ACL and passed it
+    /// to <c>NamedPipeServerStreamAcl.Create</c>. That combination is illegal -
+    /// .NET throws <see cref="ArgumentException"/> because the explicit ACL and
+    /// <c>CurrentUserOnly</c> are two ways to express the same thing - and the
+    /// Engine could not open its pipe at all on Windows. It was not caught here
+    /// because the ACL path sat behind <c>#if WINDOWS</c>: it compiled on the
+    /// build host and never ran, so every IPC test exercised the other branch.
+    /// There is now one code path for both platforms, which is the point - the
+    /// round-trip tests now cover the code that actually ships.</para>
+    /// </remarks>
+    private static NamedPipeServerStream CreatePipe(string pipeName) =>
+        new(
             pipeName,
             PipeDirection.InOut,
             maxNumberOfServerInstances: 1,
             PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-#endif
-    }
 
     /// <summary>
     /// Whether an exception is just the Shell going away rather than a fault.
