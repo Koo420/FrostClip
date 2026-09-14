@@ -24,8 +24,16 @@ namespace Frost.Engine.Tests;
 /// </remarks>
 public sealed class PowerShellEncodingTests
 {
+    /// <summary>Every PowerShell script in the repository.</summary>
+    /// <remarks>
+    /// The extension is re-checked after enumerating because on Windows a
+    /// three-character extension pattern also matches longer ones - <c>*.ps1</c>
+    /// picks up <c>.ps1xml</c> - which is a documented quirk of the underlying
+    /// Win32 search and not something the pattern can express away.
+    /// </remarks>
     private static IEnumerable<string> Scripts() =>
         Directory.EnumerateFiles(TestPaths.RepoRoot, "*.ps1", SearchOption.AllDirectories)
+            .Where(p => Path.GetExtension(p).Equals(".ps1", StringComparison.OrdinalIgnoreCase))
             .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
                 && !p.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"));
 
@@ -76,29 +84,33 @@ public sealed class PowerShellEncodingTests
     }
 
     [Fact]
-    public void TheScriptsUseCrlfOrAreAtLeastConsistent()
+    public void TheScriptsDoNotMixLineEndingsWithinASingleLine()
     {
-        // Not a correctness issue for the parser, but a .ps1 with mixed line
-        // endings confuses here-strings, which build.ps1 uses for its help.
+        // A .ps1 with mixed line endings confuses here-strings, which build.ps1
+        // uses for its help text.
+        //
+        // Deliberately narrow: this checks for a stray CR in the middle of a
+        // line, not for the file being wholly CRLF or wholly LF. Git rewrites
+        // line endings on checkout when core.autocrlf is set - the default for
+        // Git for Windows - so which of the two a working copy has is a property
+        // of the machine, not of the repository, and asserting either way makes
+        // the test pass or fail depending on who cloned it.
         foreach (var script in Scripts())
         {
             var text = File.ReadAllText(script);
-            var lone = 0;
 
             for (var i = 0; i < text.Length; i++)
             {
-                if (text[i] == '\n' && (i == 0 || text[i - 1] != '\r'))
+                if (text[i] != '\r')
                 {
-                    lone++;
+                    continue;
                 }
+
+                Assert.True(
+                    i + 1 < text.Length && text[i + 1] == '\n',
+                    $"{Path.GetFileName(script)} has a carriage return at offset {i} "
+                        + "that is not part of a CRLF pair.");
             }
-
-            var crlf = text.Split("\r\n").Length - 1;
-
-            Assert.True(
-                lone == 0 || crlf == 0,
-                $"{Path.GetFileName(script)} mixes CRLF and bare LF line endings " +
-                $"({crlf} CRLF, {lone} LF).");
         }
     }
 
