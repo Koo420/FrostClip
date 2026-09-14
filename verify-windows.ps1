@@ -129,6 +129,12 @@ function Invoke-Step {
 
     $results.Add([pscustomobject]@{ Name = $Name; Code = $code; Verdict = $verdict })
 
+    # Capped, because the point of this report is that it can be pasted back:
+    # a full test run is tens of thousands of lines and the tail is where the
+    # verdict and any failure live.
+    $lines = $output.TrimEnd() -split "`r?`n"
+    $cap = 60
+
     Add-Line ""
     Add-Line "## $Name"
     Add-Line ""
@@ -136,11 +142,6 @@ function Invoke-Step {
     Add-Line ""
     Add-Line "**$verdict** (exit $code)$(if ($meaning) { " - $meaning" })"
     Add-Line ""
-    # Capped, because the point of this report is that it can be pasted back:
-    # a full test run is tens of thousands of lines and the tail is where the
-    # verdict and any failure live.
-    $lines = $output.TrimEnd() -split "`r?`n"
-    $cap = 60
 
     Add-Line '```'
     if ($lines.Count -gt $cap) {
@@ -153,6 +154,17 @@ function Invoke-Step {
 
     Write-Host "    $verdict (exit $code)" -ForegroundColor $(
         switch ($verdict) { 'PASS' { 'Green' } 'EXPECTED' { 'Yellow' } default { 'Red' } })
+
+    # Printed to the console as well as the report, because the console is what
+    # gets copied into a bug report. A verdict with the diagnostics only in a
+    # file the reader has to be told to open separately is how four rounds of
+    # guesswork happen.
+    if ($verdict -eq 'FAIL') {
+        $tail = if ($lines.Count -gt 25) { $lines[-25..-1] } else { $lines }
+        Write-Host "    --- last $($tail.Count) lines ---" -ForegroundColor DarkGray
+        foreach ($line in $tail) { Write-Host "    $line" -ForegroundColor DarkGray }
+        Write-Host "    --- end ---" -ForegroundColor DarkGray
+    }
 }
 
 # --- environment ------------------------------------------------------------
@@ -304,24 +316,61 @@ if (-not $SkipSoak) {
 }
 
 Invoke-Step -Name 'IPC server' `
-    -Why 'The Engine/Shell named pipe against a real Windows named pipe. It is tested on the build host, but there over Unix domain sockets. Started and stopped immediately - this only checks the pipe can be created and accepts a connection.' `
+    -Why 'The Engine/Shell named pipe against a real Windows named pipe - it is tested on the build host, but there over Unix domain sockets. Starts the server, connects to it as the Shell would, and stops it.' `
     -Body {
-        $proc = Start-Process -FilePath $engine -ArgumentList '--ipc-server' -PassThru -WindowStyle Hidden
-        Start-Sleep -Seconds 3
-        # Enumerated through .NET rather than Get-ChildItem: the pipe filesystem
-        # provider is unreliable under Windows PowerShell 5.1.
-        $pipe = [System.IO.Directory]::GetFiles('\\.\pipe\') |
-            Where-Object { $_ -like '*rost*' } |
-            Select-Object -First 1
+        $stdout = Join-Path $scratch 'ipc-out.txt'
+        $stderr = Join-Path $scratch 'ipc-err.txt'
 
-        if ($pipe) {
-            Write-Output "Pipe created: $pipe"
-        } else {
-            Write-Output 'No Frost pipe found under \\.\pipe\ - the server did not come up.'
+        $proc = Start-Process -FilePath $engine -ArgumentList '--ipc-server' `
+            -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+
+        # Connecting as a client is the check that matters: enumerating
+        # \\.\pipe\ only proves a name exists, and the failure mode worth
+        # catching is a pipe that cannot be opened by the Shell. CurrentUserOnly
+        # is passed here too, so this also exercises the owner verification the
+        # real client relies on.
+        $connected = $false
+        $lastError = ''
+
+        for ($attempt = 1; $attempt -le 10 -and -not $connected; $attempt++) {
+            Start-Sleep -Milliseconds 500
+
+            if ($proc.HasExited) {
+                $lastError = "the Engine exited with code $($proc.ExitCode) before accepting a connection"
+                break
+            }
+
+            try {
+                $client = New-Object System.IO.Pipes.NamedPipeClientStream(
+                    '.', 'Frost.Engine.v1', [System.IO.Pipes.PipeDirection]::InOut,
+                    ([System.IO.Pipes.PipeOptions]::Asynchronous -bor [System.IO.Pipes.PipeOptions]::CurrentUserOnly))
+                $client.Connect(1000)
+                $connected = $client.IsConnected
+                $client.Dispose()
+            }
+            catch {
+                $lastError = $_.Exception.Message
+            }
         }
 
-        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-        $global:LASTEXITCODE = $(if ($pipe) { 0 } else { 1 })
+        if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+
+        # The Engine's own log is the useful part when this fails.
+        foreach ($file in @($stdout, $stderr)) {
+            if ((Test-Path $file) -and (Get-Item $file).Length -gt 0) {
+                Write-Output "--- $(Split-Path -Leaf $file) ---"
+                Get-Content $file | ForEach-Object { Write-Output $_ }
+            }
+        }
+
+        if ($connected) {
+            Write-Output 'Connected to the pipe as the Shell would, then disconnected cleanly.'
+            $global:LASTEXITCODE = 0
+        } else {
+            Write-Output "Could not connect to 'Frost.Engine.v1': $lastError"
+            $global:LASTEXITCODE = 1
+        }
     }
 
 # --- what the script cannot do ----------------------------------------------
@@ -380,6 +429,9 @@ Remove-Item -Recurse -Force $scratch -ErrorAction SilentlyContinue
 
 Write-Host ""
 Write-Host "Wrote $OutputPath" -ForegroundColor Green
+if ($failed.Count -gt 0) {
+    Write-Host "Failing steps printed their last 25 lines above; the full output is in the report." -ForegroundColor Yellow
+}
 Write-Host ""
 foreach ($r in $results) {
     Write-Host ("  {0,-55} {1}" -f $r.Name, $r.Verdict) -ForegroundColor $(if ($r.Verdict -eq 'PASS') { 'Green' } else { 'Red' })
