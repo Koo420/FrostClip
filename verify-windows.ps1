@@ -274,6 +274,86 @@ Add-Line "Engine under test: ``$engine``"
 
 # --- the ordered verification list from HANDOFF.md --------------------------
 
+# --- can the engine run at all? ---------------------------------------------
+
+# Checked once, before the seven steps that all invoke it. Windows Application
+# Control (Smart App Control on Windows 11, or a WDAC policy on a managed
+# machine) blocks unsigned executables, and a freshly built Frost.Engine.exe is
+# unsigned. When it blocks, every step fails identically with "An Application
+# Control policy has blocked this file", which reads like seven broken features
+# rather than one policy - and none of it is a defect in Frost.
+$engineRuns = $false
+$engineBlockReason = ''
+
+try {
+    $probe = & $engine --help 2>&1 | Out-String
+    $engineRuns = $?
+    if (-not $engineRuns) { $engineBlockReason = $probe.Trim() }
+}
+catch {
+    $engineBlockReason = $_.Exception.Message
+}
+
+if (-not $engineRuns) {
+    $isAppControl = $engineBlockReason -match 'Application Control|WDAC|blocked this file'
+
+    # Smart App Control's state lives here: 0 off, 1 enforcing, 2 evaluation.
+    $sacState = Probe {
+        (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' `
+            -Name 'VerifiedAndReputablePolicyState' -ErrorAction Stop).VerifiedAndReputablePolicyState
+    }
+
+    $sacLabel = switch ("$sacState") {
+        '0' { 'off' }
+        '1' { 'ON and enforcing - this is what is blocking the Engine' }
+        '2' { 'in evaluation mode' }
+        default { "unknown (registry value: $sacState)" }
+    }
+
+    Add-Line ""
+    Add-Line "## Cannot run: the Engine is blocked from executing"
+    Add-Line ""
+    Add-Line "``Frost.Engine.exe`` built successfully but Windows refused to run it."
+    Add-Line ""
+    Add-Line "| | |"
+    Add-Line "| --- | --- |"
+    Add-Line "| Smart App Control | $sacLabel |"
+    Add-Line "| Looks like app control | $isAppControl |"
+    Add-Line ""
+    Add-Line "What Windows said:"
+    Add-Line ""
+    Add-Line '```'
+    Add-Line $engineBlockReason
+    Add-Line '```'
+    Add-Line ""
+    Add-Line "This is not a defect in Frost. A freshly built executable is unsigned, and"
+    Add-Line "Windows Application Control blocks unsigned binaries. It is the same problem"
+    Add-Line "Phase 10 records as needing a code-signing certificate - it has simply arrived"
+    Add-Line "earlier than expected, at the point of *running* the build rather than"
+    Add-Line "installing it."
+    Add-Line ""
+    Add-Line "Diagnose which policy is responsible:"
+    Add-Line ""
+    Add-Line '```powershell'
+    Add-Line 'Get-WinEvent -LogName "Microsoft-Windows-CodeIntegrity/Operational" -MaxEvents 20 |'
+    Add-Line '    Where-Object { $_.Message -like "*Frost*" } | Format-List TimeCreated, Id, Message'
+    Add-Line '```'
+
+    $report -join "`n" | Set-Content -Path $OutputPath -Encoding utf8
+
+    Write-Host ""
+    Write-Host "Frost.Engine.exe built, but Windows will not run it." -ForegroundColor Red
+    Write-Host "  Smart App Control: $sacLabel" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host $engineBlockReason -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "The seven capture and encode steps were skipped: they all invoke the Engine," -ForegroundColor Yellow
+    Write-Host "so running them would report seven identical failures for one policy." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Wrote $OutputPath"
+    exit 4
+}
+
 Invoke-Step -Name 'Capture target discovery' `
     -Why 'Windows.Graphics.Capture finds the monitors and windows it can record. Nothing else can work if this does not.' `
     -Body { & $engine --displays; & $engine --windows }

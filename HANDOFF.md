@@ -161,6 +161,25 @@ that rule is about video, and AAC on a CPU is negligible.
    Checks that only matter while the code is changing belong in the test
    project — `SettingsUiTests` reflects, `SettingsEditor` does not.
 
+## Windows run, 2026-09-14 - what it found
+
+The verification script (`verify-windows.ps1`) was run on a real machine. Nine of
+its ten automated steps passed, including hardware encoder selection, GPU engine
+attribution, clips with audio and a mic track, the performance budget and a
+ten-minute memory soak. Three things came out of it:
+
+1. **A real shipped bug.** The Engine could never open its IPC pipe on Windows:
+   `PipeOptions.CurrentUserOnly` plus an explicit `PipeSecurity` throws. Fixed by
+   deleting the ACL branch. The reason 750 tests missed it is the lesson - the
+   ACL sat behind `#if WINDOWS`, so it compiled here and never ran. **Treat any
+   `#if WINDOWS` block as untested code**, and prefer one code path.
+2. **A test that could only pass on the machine that wrote it.** The line-ending
+   assertion depended on `core.autocrlf`, which rewrites files on checkout.
+   Anything asserting on file bytes has to survive being cloned by someone else.
+3. **Smart App Control blocks unsigned builds from running**, not just from
+   installing. See the Phase 10 note in `PROGRESS.md`; this is now a
+   prerequisite rather than a packaging detail.
+
 ## What still needs real Windows hardware
 
 These are implemented and compile, but their headline claims rest on the API

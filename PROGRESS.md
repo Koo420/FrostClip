@@ -948,6 +948,20 @@ The loop is running in a **Linux** container. Consequences, and how they are han
 > **Genuine external dependency:** a package that installs without developer mode
 > needs signing — a trusted (EV or Store) code-signing certificate. That is a
 > human decision and a purchase, not something the loop can do.
+>
+> **Windows run, 2026-09-14: signing is not only an install-time problem.** On a
+> Windows 11 machine with Smart App Control enforcing, a freshly built
+> `Frost.Engine.exe` is blocked from *executing* — "An Application Control policy
+> has blocked this file" — so every capture and encode verb fails before it
+> starts. It ran on earlier runs of the same machine and then stopped, which is
+> consistent with Smart App Control leaving evaluation mode and beginning to
+> enforce.
+>
+> This moves the certificate from a Phase 10 packaging concern to a prerequisite
+> for running an unsigned build at all on a default Windows 11 install. Worth
+> knowing before anyone plans a release: the options are a signed build, or a
+> machine where app control is off, and Smart App Control specifically cannot be
+> re-enabled once disabled without reinstalling Windows.
 
 - [ ] MSIX package builds and installs cleanly
 - [ ] Uninstall leaves no orphaned scheduled tasks / registry autostart entries
